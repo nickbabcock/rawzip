@@ -5,6 +5,7 @@ use std::io::Cursor;
 use std::path::Path;
 
 mod zip64_tests;
+mod modification_time_tests;
 
 macro_rules! zip_test_case {
     ($name:expr, $case:expr) => {

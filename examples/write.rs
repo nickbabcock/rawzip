@@ -2,7 +2,7 @@ use std::io::Write;
 
 fn main() {
     let mut writer = rawzip::ZipArchiveWriter::new(std::io::stdout());
-    writer.new_dir("dir/").unwrap();
+    writer.new_dir("dir/", rawzip::ZipEntryOptions::default()).unwrap();
 
     let options =
         rawzip::ZipEntryOptions::default().compression_method(rawzip::CompressionMethod::Deflate);

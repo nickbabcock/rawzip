@@ -181,13 +181,58 @@ impl ZipDateTime {
     pub fn timezone(&self) -> TimeZone {
         self.timezone
     }
+
+
+    /// Calculate days since Unix epoch (1970-01-01) for this date.
+    /// 
+    /// Based on Howard Hinnant's `days_from_civil` algorithm:
+    /// <https://howardhinnant.github.io/date_algorithms.html#days_from_civil>
+    /// 
+    /// Negative values indicate dates prior to 1970-01-01.
+    fn days_from_civil(&self) -> i32 {
+        let (y, m) = if self.month <= 2 {
+            (self.year as i32 - 1, self.month as i32 + 9)
+        } else {
+            (self.year as i32, self.month as i32 - 3)
+        };
+        
+        // Calculate era (400-year cycles)
+        let era = y / 400;
+        let yoe = y - era * 400; // year of era [0, 399]
+        
+        // Calculate day of year
+        let doy = (153 * m + 2) / 5 + self.day as i32 - 1; // day of year [0, 365]
+        
+        // Calculate day of era
+        let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy; // day of era [0, 146096]
+        
+        // Calculate days since epoch (era 0 starts at year 0, not 1970)
+        let days_since_civil_epoch = era * 146097 + doe - 719468;
+        
+        days_since_civil_epoch
+    }
+
+    /// Converts this ZipDateTime to Unix timestamp (seconds since epoch).
+    /// 
+    /// Matches Go's behavior: negative values (dates before 1970) and values
+    /// outside u32 range are truncated to fit in u32
+    pub(crate) fn to_unix(&self) -> u32 {
+        let days_since_epoch = self.days_from_civil();
+        
+        let total_seconds = (days_since_epoch as i64) * 86400 
+            + (self.hour as i64) * 3600 
+            + (self.minute as i64) * 60 
+            + (self.second as i64);
+            
+        total_seconds as u32
+    }
 }
 
 /// Represents an MS-DOS timestamp with 2-second precision.
 ///
 /// MS-DOS timestamps are stored as packed 16-bit values for date and time,
 /// with a limited range from 1980 to 2107 and 2-second precision for seconds.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct DosDateTime {
     time: u16,
     date: u16,
@@ -232,6 +277,29 @@ impl DosDateTime {
     pub fn second(&self) -> u8 {
         let raw_second = ((self.time & 0x1f) * 2) as u8;
         raw_second.min(58)
+    }
+
+    /// Returns the packed time and date components as (time, date).
+    pub(crate) fn into_parts(self) -> (u16, u16) {
+        (self.time, self.date)
+    }
+}
+
+impl From<&ZipDateTime> for DosDateTime {
+    fn from(zip_dt: &ZipDateTime) -> Self {
+        // Saturate year to DOS range (1980-2107)
+        let dos_year = zip_dt.year.clamp(1980, 2107);
+        
+        // Pack the date: bits 15-9: year-1980, bits 8-5: month, bits 4-0: day
+        let packed_date = ((dos_year - 1980) << 9) | ((zip_dt.month as u16) << 5) | (zip_dt.day as u16);
+        
+        // Pack the time: bits 15-11: hour, bits 10-5: minute, bits 4-0: second/2
+        let packed_time = ((zip_dt.hour as u16) << 11) | ((zip_dt.minute as u16) << 5) | ((zip_dt.second as u16) / 2);
+        
+        Self {
+            time: packed_time,
+            date: packed_date,
+        }
     }
 }
 
@@ -346,6 +414,7 @@ pub fn parse_unix_timestamp(data: &[u8]) -> Option<ZipDateTime> {
     Some(ZipDateTime::from_unix(mtime_seconds))
 }
 
+
 /// Convert Unix timestamp to broken down date/time components
 ///
 /// Based on Howard Hinnant's date library algorithm `civil_from_days`:
@@ -433,121 +502,102 @@ const fn last_day_of_month_common_year(m: usize) -> u8 {
 mod tests {
     use super::*;
 
-    impl DosDateTime {
-        pub(crate) fn from_components(
-            year: u16,
-            month: u8,
-            day: u8,
-            hour: u8,
-            minute: u8,
-            second: u8,
-        ) -> Option<Self> {
-            // Validate year range (MS-DOS supports 1980-2107)
-            if !(1980..=2107).contains(&year) {
-                return None;
-            }
 
-            // Validate month (1-12)
-            if !(1..=12).contains(&month) {
-                return None;
-            }
+    #[test]
+    fn test_zip_to_dos_conversion() {
+        // Test normal conversion
+        let zip_dt = ZipDateTime::from_components(2023, 6, 15, 14, 30, 45, 0, TimeZone::Utc);
+        let dos_dt: DosDateTime = (&zip_dt).into();
+        let (dos_time, dos_date) = dos_dt.into_parts();
+        let dos_dt_check = DosDateTime::new(dos_time, dos_date);
+        
+        assert_eq!(dos_dt_check.year(), 2023);
+        assert_eq!(dos_dt_check.month(), 6);
+        assert_eq!(dos_dt_check.day(), 15);
+        assert_eq!(dos_dt_check.hour(), 14);
+        assert_eq!(dos_dt_check.minute(), 30);
+        assert_eq!(dos_dt_check.second(), 44); // Rounded down to even second
+    }
 
-            // Validate day (1-31, simplified validation)
-            if !(1..=31).contains(&day) {
-                return None;
-            }
-
-            // Validate hour (0-23)
-            if hour > 23 {
-                return None;
-            }
-
-            // Validate minute (0-59)
-            if minute > 59 {
-                return None;
-            }
-
-            // Validate second (0-59)
-            if second > 59 {
-                return None;
-            }
-
-            // Pack the date: bits 15-9: year-1980, bits 8-5: month, bits 4-0: day
-            let packed_date = ((year - 1980) << 9) | ((month as u16) << 5) | (day as u16);
-
-            // Pack the time: bits 15-11: hour, bits 10-5: minute, bits 4-0: second/2
-            let packed_time =
-                ((hour as u16) << 11) | ((minute as u16) << 5) | ((second as u16) / 2);
-
-            Some(Self {
-                time: packed_time,
-                date: packed_date,
-            })
-        }
+    #[test]
+    fn test_zip_to_dos_year_saturation() {
+        // Test year before DOS range (should saturate to 1980)
+        let zip_dt_before = ZipDateTime::from_components(1979, 6, 15, 14, 30, 45, 0, TimeZone::Utc);
+        let dos_dt: DosDateTime = (&zip_dt_before).into();
+        let (dos_time, dos_date) = dos_dt.into_parts();
+        let dos_dt_check = DosDateTime::new(dos_time, dos_date);
+        assert_eq!(dos_dt_check.year(), 1980); // Saturated to minimum
+        assert_eq!(dos_dt_check.month(), 6);
+        assert_eq!(dos_dt_check.day(), 15);
+        
+        // Test year way before DOS range
+        let zip_dt_way_before = ZipDateTime::from_components(1800, 1, 1, 0, 0, 0, 0, TimeZone::Utc);
+        let dos_dt2: DosDateTime = (&zip_dt_way_before).into();
+        let (dos_time2, dos_date2) = dos_dt2.into_parts();
+        let dos_dt2_check = DosDateTime::new(dos_time2, dos_date2);
+        assert_eq!(dos_dt2_check.year(), 1980); // Saturated to minimum
+        
+        // Test year after DOS range (should saturate to 2107)
+        let zip_dt_after = ZipDateTime::from_components(2108, 6, 15, 14, 30, 45, 0, TimeZone::Utc);
+        let dos_dt3: DosDateTime = (&zip_dt_after).into();
+        let (dos_time3, dos_date3) = dos_dt3.into_parts();
+        let dos_dt3_check = DosDateTime::new(dos_time3, dos_date3);
+        assert_eq!(dos_dt3_check.year(), 2107); // Saturated to maximum
+        assert_eq!(dos_dt3_check.month(), 6);
+        assert_eq!(dos_dt3_check.day(), 15);
+        
+        // Test year way after DOS range
+        let zip_dt_way_after = ZipDateTime::from_components(3000, 12, 31, 23, 59, 59, 0, TimeZone::Utc);
+        let dos_dt4: DosDateTime = (&zip_dt_way_after).into();
+        let (dos_time4, dos_date4) = dos_dt4.into_parts();
+        let dos_dt4_check = DosDateTime::new(dos_time4, dos_date4);
+        assert_eq!(dos_dt4_check.year(), 2107); // Saturated to maximum
     }
 
     #[test]
     fn test_dos_datetime() {
-        // Test creation from components
-        let datetime = DosDateTime::from_components(2023, 6, 15, 14, 30, 45).unwrap();
-        assert_eq!(datetime.year(), 2023);
-        assert_eq!(datetime.month(), 6);
-        assert_eq!(datetime.day(), 15);
-        assert_eq!(datetime.hour(), 14);
-        assert_eq!(datetime.minute(), 30);
-        assert_eq!(datetime.second(), 44); // Rounded down to even second
+        // Test using the From trait
+        let zip_dt = ZipDateTime::from_components(2023, 6, 15, 14, 30, 45, 0, TimeZone::Utc);
+        let dos_dt: DosDateTime = (&zip_dt).into();
+        assert_eq!(dos_dt.year(), 2023);
+        assert_eq!(dos_dt.month(), 6);
+        assert_eq!(dos_dt.day(), 15);
+        assert_eq!(dos_dt.hour(), 14);
+        assert_eq!(dos_dt.minute(), 30);
+        assert_eq!(dos_dt.second(), 44); // Rounded down to even second
     }
 
-    #[test]
-    fn test_dos_datetime_validation() {
-        // Test invalid year
-        assert!(DosDateTime::from_components(1979, 1, 1, 0, 0, 0).is_none());
-        assert!(DosDateTime::from_components(2108, 1, 1, 0, 0, 0).is_none());
-
-        // Test invalid month
-        assert!(DosDateTime::from_components(2020, 0, 1, 0, 0, 0).is_none());
-        assert!(DosDateTime::from_components(2020, 13, 1, 0, 0, 0).is_none());
-
-        // Test invalid day
-        assert!(DosDateTime::from_components(2020, 1, 0, 0, 0, 0).is_none());
-        assert!(DosDateTime::from_components(2020, 1, 32, 0, 0, 0).is_none());
-
-        // Test invalid hour
-        assert!(DosDateTime::from_components(2020, 1, 1, 24, 0, 0).is_none());
-
-        // Test invalid minute
-        assert!(DosDateTime::from_components(2020, 1, 1, 0, 60, 0).is_none());
-
-        // Test invalid second
-        assert!(DosDateTime::from_components(2020, 1, 1, 0, 0, 60).is_none());
-    }
 
     #[test]
     fn test_dos_datetime_odd_seconds() {
-        // Test that odd seconds are rounded down
-        let datetime = DosDateTime::from_components(2020, 1, 1, 12, 30, 45).unwrap();
-        assert_eq!(datetime.second(), 44);
+        // Test that odd seconds are rounded down using the From trait
+        let zip_dt_odd = ZipDateTime::from_components(2020, 1, 1, 12, 30, 45, 0, TimeZone::Utc);
+        let dos_dt_odd: DosDateTime = (&zip_dt_odd).into();
+        assert_eq!(dos_dt_odd.second(), 44); // 45 rounded down to 44
 
-        let datetime = DosDateTime::from_components(2020, 1, 1, 12, 30, 46).unwrap();
-        assert_eq!(datetime.second(), 46);
+        let zip_dt_even = ZipDateTime::from_components(2020, 1, 1, 12, 30, 46, 0, TimeZone::Utc);
+        let dos_dt_even: DosDateTime = (&zip_dt_even).into();
+        assert_eq!(dos_dt_even.second(), 46); // 46 stays 46
     }
 
     #[test]
     fn test_dos_datetime_edge_cases() {
-        // Test minimum date
-        let datetime = DosDateTime::from_components(1980, 1, 1, 0, 0, 0).unwrap();
-        assert_eq!(datetime.year(), 1980);
-        assert_eq!(datetime.month(), 1);
-        assert_eq!(datetime.day(), 1);
+        // Test minimum date using From trait
+        let zip_dt_min = ZipDateTime::from_components(1980, 1, 1, 0, 0, 0, 0, TimeZone::Utc);
+        let dos_dt_min: DosDateTime = (&zip_dt_min).into();
+        assert_eq!(dos_dt_min.year(), 1980);
+        assert_eq!(dos_dt_min.month(), 1);
+        assert_eq!(dos_dt_min.day(), 1);
 
-        // Test maximum date
-        let datetime = DosDateTime::from_components(2107, 12, 31, 23, 59, 58).unwrap();
-        assert_eq!(datetime.year(), 2107);
-        assert_eq!(datetime.month(), 12);
-        assert_eq!(datetime.day(), 31);
-        assert_eq!(datetime.hour(), 23);
-        assert_eq!(datetime.minute(), 59);
-        assert_eq!(datetime.second(), 58);
+        // Test maximum date using From trait
+        let zip_dt_max = ZipDateTime::from_components(2107, 12, 31, 23, 59, 58, 0, TimeZone::Utc);
+        let dos_dt_max: DosDateTime = (&zip_dt_max).into();
+        assert_eq!(dos_dt_max.year(), 2107);
+        assert_eq!(dos_dt_max.month(), 12);
+        assert_eq!(dos_dt_max.day(), 31);
+        assert_eq!(dos_dt_max.hour(), 23);
+        assert_eq!(dos_dt_max.minute(), 59);
+        assert_eq!(dos_dt_max.second(), 58);
     }
 
     #[test]
@@ -622,6 +672,88 @@ mod tests {
         assert_eq!(datetime.second(), 1);
         assert_eq!(datetime.nanosecond(), 500000000);
         assert_eq!(datetime.timezone(), TimeZone::Utc);
+    }
+
+    #[test]
+    fn test_to_unix_comprehensive() {
+        // Test comprehensive cases including edge cases and leap years
+        
+        // Test first day of each month in a leap year (2020)
+        let jan_1_2020 = ZipDateTime::from_components(2020, 1, 1, 0, 0, 0, 0, TimeZone::Utc);
+        assert_eq!(jan_1_2020.to_unix(), 1577836800);
+        
+        let feb_29_2020 = ZipDateTime::from_components(2020, 2, 29, 0, 0, 0, 0, TimeZone::Utc);
+        assert_eq!(feb_29_2020.to_unix(), 1582934400);
+        
+        let mar_1_2020 = ZipDateTime::from_components(2020, 3, 1, 0, 0, 0, 0, TimeZone::Utc);
+        assert_eq!(mar_1_2020.to_unix(), 1583020800);
+        
+        // Test non-leap year (2021)
+        let feb_28_2021 = ZipDateTime::from_components(2021, 2, 28, 0, 0, 0, 0, TimeZone::Utc);
+        assert_eq!(feb_28_2021.to_unix(), 1614470400);
+        
+        // Test century boundary (non-leap year despite being divisible by 4)
+        let mar_1_1900 = ZipDateTime::from_components(1900, 3, 1, 0, 0, 0, 0, TimeZone::Utc);
+        // This is before Unix epoch, but we now match Go's behavior and wrap to u32
+        let wrapped_result = mar_1_1900.to_unix();
+        assert!(wrapped_result > 0); // Should wrap to positive value
+        
+        // Test year 2038 boundary (close to u32::MAX seconds)
+        let early_2038 = ZipDateTime::from_components(2038, 1, 1, 0, 0, 0, 0, TimeZone::Utc);
+        let timestamp_2038 = early_2038.to_unix();
+        assert!(timestamp_2038 > 0); // Should have a valid positive timestamp
+        
+        // Test overflow case (now wraps like Go's uint32 cast)
+        let far_future = ZipDateTime::from_components(2200, 1, 1, 0, 0, 0, 0, TimeZone::Utc);
+        let wrapped_result = far_future.to_unix();
+        // Should wrap around due to i64 to u32 cast, result will be some u32 value
+        assert!(wrapped_result != u32::MAX); // Just verify it returns some wrapped value
+    }
+
+    #[test]
+    fn test_to_unix_accuracy() {
+        // Test known dates against their Unix timestamps (verified with Python datetime)
+        
+        // Unix epoch: 1970-01-01 00:00:00 UTC = 0
+        let epoch = ZipDateTime::from_components(1970, 1, 1, 0, 0, 0, 0, TimeZone::Utc);
+        assert_eq!(epoch.to_unix(), 0);
+        
+        // 2000-01-01 00:00:00 UTC = 946684800
+        let y2k = ZipDateTime::from_components(2000, 1, 1, 0, 0, 0, 0, TimeZone::Utc);
+        assert_eq!(y2k.to_unix(), 946684800);
+        
+        // 2023-06-15 14:30:45 UTC = 1686839445
+        let test_date = ZipDateTime::from_components(2023, 6, 15, 14, 30, 45, 0, TimeZone::Utc);
+        assert_eq!(test_date.to_unix(), 1686839445);
+        
+        // Leap year test: 2020-02-29 12:00:00 UTC = 1582977600
+        let leap_day = ZipDateTime::from_components(2020, 2, 29, 12, 0, 0, 0, TimeZone::Utc);
+        assert_eq!(leap_day.to_unix(), 1582977600);
+        
+        // Test dates before Unix epoch now wrap around like Go
+        let before_epoch = ZipDateTime::from_components(1969, 12, 31, 23, 59, 59, 0, TimeZone::Utc);
+        let wrapped_result = before_epoch.to_unix();
+        // -1 as i64 becomes 4294967295 as u32 (wrapping behavior)
+        assert_eq!(wrapped_result, 4294967295);
+    }
+
+    #[test]
+    fn test_days_from_civil() {
+        // Test Unix epoch
+        let epoch = ZipDateTime::from_components(1970, 1, 1, 0, 0, 0, 0, TimeZone::Utc);
+        assert_eq!(epoch.days_from_civil(), 0);
+        
+        // Test Y2K (verified with Python)
+        let y2k = ZipDateTime::from_components(2000, 1, 1, 0, 0, 0, 0, TimeZone::Utc);
+        assert_eq!(y2k.days_from_civil(), 10957);
+        
+        // Test leap year boundary (verified with Python) 
+        let leap_day = ZipDateTime::from_components(2020, 2, 29, 0, 0, 0, 0, TimeZone::Utc);
+        assert_eq!(leap_day.days_from_civil(), 18321);
+        
+        // Test before epoch (negative value)
+        let before_epoch = ZipDateTime::from_components(1969, 12, 31, 0, 0, 0, 0, TimeZone::Utc);
+        assert_eq!(before_epoch.days_from_civil(), -1);
     }
 
     #[test]
@@ -738,6 +870,12 @@ mod property_tests {
         assert_eq!(zip_datetime.second(), dt.second() as u8, "second");
         assert_eq!(zip_datetime.timezone(), TimeZone::Utc, "timezone");
         assert_eq!(zip_datetime.nanosecond(), 0, "nanosecond");
+
+        assert_eq!(
+            zip_datetime.to_unix(),
+            unix_seconds,
+            "to_unix should match input"
+        );
     }
 
     /// Property test: NTFS timestamp conversion should match jiff's conversion
