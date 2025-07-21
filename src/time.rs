@@ -52,14 +52,14 @@
 //!
 //!     if !entry.is_dir() {
 //!         // Copy file with preserved modification time
-//!         let mut file = output_archive.new_file(&name)
+//!         let (mut entry, config) = output_archive.new_file(&name)
 //!             .last_modified(utc_time)
-//!             .create()
+//!             .start()
 //!             .unwrap();
-//!         let mut writer = ZipDataWriter::new(&mut file);
+//!         let mut writer = config.wrap(&mut entry);
 //!         writer.write_all(b"example data").unwrap();
 //!         let (_, descriptor) = writer.finish().unwrap();
-//!         file.finish(descriptor).unwrap();
+//!         entry.finish(descriptor).unwrap();
 //!     } else {
 //!         // Copy directory with preserved modification time
 //!         output_archive.new_dir(&name)

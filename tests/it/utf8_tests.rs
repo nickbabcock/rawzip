@@ -18,11 +18,11 @@ fn test_filename_utf8_flag(#[case] filename: &str, #[case] should_have_utf8_flag
     let mut output = Vec::new();
     {
         let mut archive = rawzip::ZipArchiveWriter::new(&mut output);
-        let mut file = archive.new_file(filename).create().unwrap();
-        let mut writer = rawzip::ZipDataWriter::new(&mut file);
+        let (mut entry, config) = archive.new_file(filename).start().unwrap();
+        let mut writer = config.wrap(&mut entry);
         writer.write_all(b"test content").unwrap();
         let (_, descriptor) = writer.finish().unwrap();
-        file.finish(descriptor).unwrap();
+        entry.finish(descriptor).unwrap();
         archive.finish().unwrap();
     }
 

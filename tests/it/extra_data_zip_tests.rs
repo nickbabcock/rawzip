@@ -1,4 +1,4 @@
-use rawzip::{ZipArchive, ZipArchiveWriter, ZipDataWriter};
+use rawzip::{ZipArchive, ZipArchiveWriter};
 use rstest::rstest;
 use std::io::{Cursor, Write};
 
@@ -36,11 +36,11 @@ fn test_concatenated_zip_files() {
         data.extend_from_slice(b"PREFIX_FOR_FIRST_ZIP\n");
         {
             let mut archive = ZipArchiveWriter::new(&mut data);
-            let mut file = archive.new_file("first.txt").create().unwrap();
-            let mut writer = ZipDataWriter::new(&mut file);
+            let (mut entry, config) = archive.new_file("first.txt").start().unwrap();
+            let mut writer = config.wrap(&mut entry);
             writer.write_all(b"First ZIP content").unwrap();
             let (_, descriptor) = writer.finish().unwrap();
-            file.finish(descriptor).unwrap();
+            entry.finish(descriptor).unwrap();
             archive.finish().unwrap();
         }
 
@@ -48,11 +48,11 @@ fn test_concatenated_zip_files() {
         data.extend_from_slice(b"PREFIX_FOR_SECOND_ZIP\n");
         {
             let mut archive = ZipArchiveWriter::new(&mut data);
-            let mut file = archive.new_file("second.txt").create().unwrap();
-            let mut writer = ZipDataWriter::new(&mut file);
+            let (mut entry, config) = archive.new_file("second.txt").start().unwrap();
+            let mut writer = config.wrap(&mut entry);
             writer.write_all(b"Second ZIP content").unwrap();
             let (_, descriptor) = writer.finish().unwrap();
-            file.finish(descriptor).unwrap();
+            entry.finish(descriptor).unwrap();
             archive.finish().unwrap();
         }
         data
@@ -151,12 +151,12 @@ fn test_zip_declared_prelude(#[case] entry_count: usize) {
 
     for i in 0..entry_count {
         let filename = format!("file_{:05}.txt", i);
-        let mut file = archive.new_file(&filename).create().unwrap();
-        let mut writer = rawzip::ZipDataWriter::new(&mut file);
+        let (mut entry, config) = archive.new_file(&filename).start().unwrap();
+        let mut writer = config.wrap(&mut entry);
         writer.write_all(b"x").unwrap();
         let (_, descriptor_output) = writer.finish().unwrap();
 
-        file.finish(descriptor_output).unwrap();
+        entry.finish(descriptor_output).unwrap();
     }
 
     let writer = archive.finish().unwrap();

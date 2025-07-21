@@ -1,6 +1,4 @@
-use rawzip::{
-    extra_fields::ExtraFieldId, Header, ZipArchive, ZipArchiveWriter, ZipDataWriter, ZipLocator,
-};
+use rawzip::{extra_fields::ExtraFieldId, Header, ZipArchive, ZipArchiveWriter, ZipLocator};
 use std::io::{Cursor, Write};
 
 #[test]
@@ -11,40 +9,40 @@ fn test_extra_fields_comprehensive() {
     let my_custom_field = ExtraFieldId::new(0x6666);
 
     // File with extra fields only in the local file header
-    let mut local_file = archive
+    let (mut local_entry, config) = archive
         .new_file("video.mp4")
         .extra_field(my_custom_field, b"field1", Header::LOCAL)
         .unwrap()
-        .create()
+        .start()
         .unwrap();
-    let mut writer = ZipDataWriter::new(&mut local_file);
+    let mut writer = config.wrap(&mut local_entry);
     writer.write_all(b"video data").unwrap();
     let (_, desc) = writer.finish().unwrap();
-    local_file.finish(desc).unwrap();
+    local_entry.finish(desc).unwrap();
 
     // File with extra fields only in the central directory
-    let mut central_file = archive
+    let (mut central_entry, config) = archive
         .new_file("document.pdf")
         .extra_field(my_custom_field, b"field2", Header::CENTRAL)
         .unwrap()
-        .create()
+        .start()
         .unwrap();
-    let mut writer = ZipDataWriter::new(&mut central_file);
+    let mut writer = config.wrap(&mut central_entry);
     writer.write_all(b"PDF content").unwrap();
     let (_, desc) = writer.finish().unwrap();
-    central_file.finish(desc).unwrap();
+    central_entry.finish(desc).unwrap();
 
     // File with extra fields in both headers for maximum compatibility
-    let mut both_file = archive
+    let (mut both_entry, config) = archive
         .new_file("important.dat")
         .extra_field(my_custom_field, b"field3", Header::default())
         .unwrap()
-        .create()
+        .start()
         .unwrap();
-    let mut writer = ZipDataWriter::new(&mut both_file);
+    let mut writer = config.wrap(&mut both_entry);
     writer.write_all(b"important data").unwrap();
     let (_, desc) = writer.finish().unwrap();
-    both_file.finish(desc).unwrap();
+    both_entry.finish(desc).unwrap();
 
     archive.finish().unwrap();
 
@@ -165,7 +163,7 @@ fn test_extra_field_deduplication_behavior() {
 
     let custom_field = ExtraFieldId::new(0x7777);
 
-    let mut file = archive
+    let (mut entry, config) = archive
         .new_file("duplicate.txt")
         .extra_field(custom_field, b"first", Header::default())
         .unwrap()
@@ -173,13 +171,13 @@ fn test_extra_field_deduplication_behavior() {
         .unwrap()
         .extra_field(custom_field, b"third", Header::default())
         .unwrap()
-        .create()
+        .start()
         .unwrap();
 
-    let mut writer = ZipDataWriter::new(&mut file);
+    let mut writer = config.wrap(&mut entry);
     writer.write_all(b"test content").unwrap();
     let (_, desc) = writer.finish().unwrap();
-    file.finish(desc).unwrap();
+    entry.finish(desc).unwrap();
 
     archive.finish().unwrap();
 
