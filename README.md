@@ -31,16 +31,16 @@ let mut output = Vec::new();
 let mut archive = rawzip::ZipArchiveWriter::new(&mut output);
 
 // Start of a new file in our zip archive with deflate compression.
-let mut file = archive.new_file("file.txt")
+let (mut entry, config) = archive.new_file("file.txt")
     .compression_method(rawzip::CompressionMethod::Deflate)
-    .create()?;
+    .start()?;
 
-// Wrap the file in a deflate compressor.
-let mut encoder = flate2::write::DeflateEncoder::new(&mut file, flate2::Compression::default());
+// Create the deflate compressor
+let encoder = flate2::write::DeflateEncoder::new(&mut entry, flate2::Compression::default());
 
 // Wrap the compressor in a data writer, which will track information for the
 // Zip data descriptor (like uncompressed size and crc).
-let mut writer = rawzip::ZipDataWriter::new(encoder);
+let mut writer = config.wrap(encoder);
 
 // Copy the data to the writer.
 std::io::copy(&mut &data[..], &mut writer)?;
@@ -49,7 +49,7 @@ std::io::copy(&mut &data[..], &mut writer)?;
 let (_, descriptor) = writer.finish()?;
 
 // Write out the data descriptor and return the number of bytes the data compressed to.
-let compressed = file.finish(descriptor)?;
+let compressed = entry.finish(descriptor)?;
 
 // Finish the archive, which will write the central directory.
 archive.finish()?;

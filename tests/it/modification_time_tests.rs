@@ -1,7 +1,7 @@
 use rawzip::{
     extra_fields::{ExtraFieldId, ExtraFields},
     time::{LocalDateTime, UtcDateTime, ZipDateTimeKind},
-    ZipArchive, ZipArchiveWriter, ZipDataWriter,
+    ZipArchive, ZipArchiveWriter,
 };
 use std::io::Write;
 
@@ -14,15 +14,15 @@ fn test_modification_time_roundtrip_file() {
     // Create archive with modification time
     {
         let mut archive = ZipArchiveWriter::new(&mut output);
-        let mut file = archive
+        let (mut entry, config) = archive
             .new_file("test.txt")
             .last_modified(datetime)
-            .create()
+            .start()
             .unwrap();
-        let mut writer = ZipDataWriter::new(&mut file);
+        let mut writer = config.wrap(&mut entry);
         writer.write_all(b"Hello, world!").unwrap();
         let (_, descriptor) = writer.finish().unwrap();
-        file.finish(descriptor).unwrap();
+        entry.finish(descriptor).unwrap();
         archive.finish().unwrap();
     }
 
@@ -78,11 +78,11 @@ fn test_no_modification_time_defaults_to_zero() {
     // Create archive without modification time
     {
         let mut archive = ZipArchiveWriter::new(&mut output);
-        let mut file = archive.new_file("test.txt").create().unwrap();
-        let mut writer = ZipDataWriter::new(&mut file);
+        let (mut entry, config) = archive.new_file("test.txt").start().unwrap();
+        let mut writer = config.wrap(&mut entry);
         writer.write_all(b"Hello, world!").unwrap();
         let (_, descriptor) = writer.finish().unwrap();
-        file.finish(descriptor).unwrap();
+        entry.finish(descriptor).unwrap();
         archive.finish().unwrap();
     }
 
@@ -112,15 +112,15 @@ fn test_extended_timestamp_format_present() {
     // Create archive with modification time
     {
         let mut archive = ZipArchiveWriter::new(&mut output);
-        let mut file = archive
+        let (mut entry, config) = archive
             .new_file("test.txt")
             .last_modified(datetime)
-            .create()
+            .start()
             .unwrap();
-        let mut writer = ZipDataWriter::new(&mut file);
+        let mut writer = config.wrap(&mut entry);
         writer.write_all(b"Hello, world!").unwrap();
         let (_, descriptor) = writer.finish().unwrap();
-        file.finish(descriptor).unwrap();
+        entry.finish(descriptor).unwrap();
         archive.finish().unwrap();
     }
 
@@ -143,11 +143,11 @@ fn test_no_extended_timestamp_without_modification_time() {
     // Create archive without modification time
     {
         let mut archive = ZipArchiveWriter::new(&mut output);
-        let mut file = archive.new_file("test.txt").create().unwrap();
-        let mut writer = ZipDataWriter::new(&mut file);
+        let (mut entry, config) = archive.new_file("test.txt").start().unwrap();
+        let mut writer = config.wrap(&mut entry);
         writer.write_all(b"Hello, world!").unwrap();
         let (_, descriptor) = writer.finish().unwrap();
-        file.finish(descriptor).unwrap();
+        entry.finish(descriptor).unwrap();
         archive.finish().unwrap();
     }
 
@@ -170,15 +170,15 @@ fn test_timestamp_before_dos_range() {
     // Create archive with pre-1980 timestamp
     {
         let mut archive = ZipArchiveWriter::new(&mut output);
-        let mut file = archive
+        let (mut entry, config) = archive
             .new_file("test.txt")
             .last_modified(datetime)
-            .create()
+            .start()
             .unwrap();
-        let mut writer = ZipDataWriter::new(&mut file);
+        let mut writer = config.wrap(&mut entry);
         writer.write_all(b"Hello, world!").unwrap();
         let (_, descriptor) = writer.finish().unwrap();
-        file.finish(descriptor).unwrap();
+        entry.finish(descriptor).unwrap();
         archive.finish().unwrap();
     }
 
@@ -207,26 +207,26 @@ fn test_multiple_files_different_timestamps() {
         let mut archive = ZipArchiveWriter::new(&mut output);
 
         // First file
-        let mut file1 = archive
+        let (mut entry1, config1) = archive
             .new_file("file1.txt")
             .last_modified(datetime1)
-            .create()
+            .start()
             .unwrap();
-        let mut writer1 = ZipDataWriter::new(&mut file1);
+        let mut writer1 = config1.wrap(&mut entry1);
         writer1.write_all(b"File 1").unwrap();
         let (_, descriptor1) = writer1.finish().unwrap();
-        file1.finish(descriptor1).unwrap();
+        entry1.finish(descriptor1).unwrap();
 
         // Second file
-        let mut file2 = archive
+        let (mut entry2, config2) = archive
             .new_file("file2.txt")
             .last_modified(datetime2)
-            .create()
+            .start()
             .unwrap();
-        let mut writer2 = ZipDataWriter::new(&mut file2);
+        let mut writer2 = config2.wrap(&mut entry2);
         writer2.write_all(b"File 2").unwrap();
         let (_, descriptor2) = writer2.finish().unwrap();
-        file2.finish(descriptor2).unwrap();
+        entry2.finish(descriptor2).unwrap();
 
         archive.finish().unwrap();
     }

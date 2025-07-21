@@ -10,7 +10,7 @@
 //!
 //! Run in release mode.
 
-use rawzip::{ZipArchiveWriter, ZipDataWriter};
+use rawzip::ZipArchiveWriter;
 use std::io::{Read, Write};
 
 /// A reader that yields zeros without storing them in memory
@@ -46,33 +46,33 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     for i in 0..100_000 {
         let filename = format!("file_{:05}.txt", i);
 
-        let mut file = archive
+        let (mut entry, config) = archive
             .new_file(&filename)
             .compression_method(rawzip::CompressionMethod::Store)
-            .create()?;
+            .start()?;
 
-        let mut writer = ZipDataWriter::new(&mut file);
-        writer.write_all(b"x")?;
-        let (_, output) = writer.finish()?;
-        file.finish(output)?;
+        let mut data_writer = config.wrap(&mut entry);
+        data_writer.write_all(b"x")?;
+        let (_, output) = data_writer.finish()?;
+        entry.finish(output)?;
     }
 
     println!("  Added 100,000 small files");
     println!("  Adding 5GB zero file with Zstd compression...");
 
-    let mut big_file = archive
+    let (mut big_entry, config) = archive
         .new_file("big_zeros.dat")
         .compression_method(rawzip::CompressionMethod::Zstd)
-        .create()?;
+        .start()?;
 
-    let encoder = zstd::Encoder::new(&mut big_file, 3)?; // Compression level 3
-    let mut writer = ZipDataWriter::new(encoder);
+    let encoder = zstd::Encoder::new(&mut big_entry, 3)?; // Compression level 3
+    let mut data_writer = config.wrap(encoder);
     let mut zero_reader = ZeroReader::new(5 * 1024 * 1024 * 1024); // 5GB
-    std::io::copy(&mut zero_reader, &mut writer)?;
+    std::io::copy(&mut zero_reader, &mut data_writer)?;
 
-    let (encoder, output) = writer.finish()?;
+    let (encoder, output) = data_writer.finish()?;
     encoder.finish()?;
-    big_file.finish(output)?;
+    big_entry.finish(output)?;
     archive.finish()?;
     println!("Successfully created big.zip with 100,001 entries");
 

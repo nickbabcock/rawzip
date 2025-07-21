@@ -1,4 +1,4 @@
-use rawzip::{ZipArchive, ZipArchiveWriter, ZipDataWriter, RECOMMENDED_BUFFER_SIZE};
+use rawzip::{ZipArchive, ZipArchiveWriter, RECOMMENDED_BUFFER_SIZE};
 use rstest::rstest;
 use std::io::{Cursor, Write};
 
@@ -53,12 +53,12 @@ fn test_zip64_threshold_entries(#[case] entry_count: usize, #[case] should_be_zi
 
     for i in 0..entry_count {
         let filename = format!("file_{:05}.txt", i);
-        let mut file = archive.new_file(&filename).create().unwrap();
-        let mut writer = ZipDataWriter::new(&mut file);
+        let (mut entry, config) = archive.new_file(&filename).start().unwrap();
+        let mut writer = config.wrap(&mut entry);
         writer.write_all(b"x").unwrap();
         let (_, descriptor_output) = writer.finish().unwrap();
 
-        file.finish(descriptor_output).unwrap();
+        entry.finish(descriptor_output).unwrap();
     }
 
     let writer = archive.finish().unwrap();

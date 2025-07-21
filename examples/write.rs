@@ -1,4 +1,4 @@
-use rawzip::{ZipArchiveWriter, ZipDataWriter};
+use rawzip::ZipArchiveWriter;
 use std::env;
 use std::fs::{self, File};
 use std::io::Write;
@@ -71,16 +71,15 @@ fn add_file_to_archive<W: Write>(
         builder = builder.unix_permissions(permissions);
     }
 
-    let mut file = builder.create()?;
-
     // Read and compress the file content using Deflate
     let file_content = fs::read(file_path)?;
-    let encoder = flate2::write::DeflateEncoder::new(&mut file, flate2::Compression::default());
-    let mut writer = ZipDataWriter::new(encoder);
+    let (mut entry, config) = builder.start()?;
+    let encoder = flate2::write::DeflateEncoder::new(&mut entry, flate2::Compression::default());
+    let mut writer = config.wrap(encoder);
     writer.write_all(&file_content)?;
     let (encoder, output) = writer.finish()?;
     encoder.finish()?;
-    file.finish(output)?;
+    entry.finish(output)?;
 
     println!("  adding: {}", archive_path);
     Ok(())

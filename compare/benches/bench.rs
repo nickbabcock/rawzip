@@ -11,17 +11,17 @@ fn create_test_zip<const TIMESTAMP: bool>(entries: usize) -> Vec<u8> {
 
     let mut names = NameIter::new();
     for i in 0..entries {
-        let mut file = archive
+        let mut file_builder = archive
             .new_file(names.name_of(i))
             .compression_method(rawzip::CompressionMethod::Store);
         if TIMESTAMP {
-            file = file.last_modified(jan_1_2001);
+            file_builder = file_builder.last_modified(jan_1_2001);
         }
-        let mut file = file.create().unwrap();
-        let mut writer = rawzip::ZipDataWriter::new(&mut file);
+        let (mut entry, config) = file_builder.start().unwrap();
+        let mut writer = config.wrap(&mut entry);
         writer.write_all(b"x").unwrap();
         let (_, descriptor) = writer.finish().unwrap();
-        file.finish(descriptor).unwrap();
+        entry.finish(descriptor).unwrap();
     }
 
     archive.finish().unwrap();
