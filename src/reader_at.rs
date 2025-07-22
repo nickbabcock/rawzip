@@ -1,7 +1,7 @@
+use crate::errors::{Error, ErrorKind};
 #[cfg(unix)]
 use std::os::unix::fs::FileExt;
-
-use crate::errors::{Error, ErrorKind};
+use std::{rc::Rc, sync::Arc};
 
 /// Provides reading bytes at a specific offset
 ///
@@ -221,5 +221,149 @@ impl ReaderAt for Vec<u8> {
     #[inline]
     fn read_at(&self, buf: &mut [u8], offset: u64) -> std::io::Result<usize> {
         self.as_slice().read_at(buf, offset)
+    }
+}
+
+impl<T: ReaderAt + ?Sized> ReaderAt for Arc<T> {
+    #[inline]
+    fn read_at(&self, buf: &mut [u8], offset: u64) -> std::io::Result<usize> {
+        (**self).read_at(buf, offset)
+    }
+}
+
+impl<T: ReaderAt + ?Sized> ReaderAt for Rc<T> {
+    #[inline]
+    fn read_at(&self, buf: &mut [u8], offset: u64) -> std::io::Result<usize> {
+        (**self).read_at(buf, offset)
+    }
+}
+
+impl<T: ReaderAt + ?Sized> ReaderAt for Box<T> {
+    #[inline]
+    fn read_at(&self, buf: &mut [u8], offset: u64) -> std::io::Result<usize> {
+        (**self).read_at(buf, offset)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Cursor;
+
+    const TEST_DATA: &[u8] = b"Hello, World! This is test data for ReaderAt implementations.";
+
+    #[test]
+    fn test_smart_pointer_implementations() {
+        let data = TEST_DATA.to_vec();
+        let mut buf = [0u8; 5];
+
+        // Test Arc<Vec<u8>>
+        let arc_reader = Arc::new(data);
+        assert_eq!(arc_reader.read_at(&mut buf, 0).unwrap(), 5);
+        assert_eq!(&buf, b"Hello");
+
+        buf.fill(0);
+        assert_eq!(arc_reader.read_at(&mut buf, 7).unwrap(), 5);
+        assert_eq!(&buf, b"World");
+        let data = Arc::into_inner(arc_reader).unwrap();
+
+        // Test Rc<Vec<u8>>
+        let rc_reader = Rc::new(data);
+        buf.fill(0);
+        assert_eq!(rc_reader.read_at(&mut buf, 0).unwrap(), 5);
+        assert_eq!(&buf, b"Hello");
+
+        buf.fill(0);
+        assert_eq!(rc_reader.read_at(&mut buf, 7).unwrap(), 5);
+        assert_eq!(&buf, b"World");
+        let data = Rc::try_unwrap(rc_reader).unwrap();
+
+        // Test Box<Vec<u8>>
+        let box_reader = Box::new(data);
+        buf.fill(0);
+        assert_eq!(box_reader.read_at(&mut buf, 0).unwrap(), 5);
+        assert_eq!(&buf, b"Hello");
+
+        buf.fill(0);
+        assert_eq!(box_reader.read_at(&mut buf, 7).unwrap(), 5);
+        assert_eq!(&buf, b"World");
+    }
+
+    #[test]
+    fn test_reference_implementations() {
+        let mut data = TEST_DATA.to_vec();
+        let mut buf = [0u8; 5];
+
+        // Test &Vec<u8>
+        let ref_reader = &data;
+        assert_eq!(ref_reader.read_at(&mut buf, 0).unwrap(), 5);
+        assert_eq!(&buf, b"Hello");
+
+        buf.fill(0);
+        assert_eq!(ref_reader.read_at(&mut buf, 7).unwrap(), 5);
+        assert_eq!(&buf, b"World");
+
+        // Test &mut Vec<u8>
+        let mut_ref_reader = &mut data;
+        buf.fill(0);
+        assert_eq!(mut_ref_reader.read_at(&mut buf, 0).unwrap(), 5);
+        assert_eq!(&buf, b"Hello");
+
+        buf.fill(0);
+        assert_eq!(mut_ref_reader.read_at(&mut buf, 7).unwrap(), 5);
+        assert_eq!(&buf, b"World");
+    }
+
+    #[test]
+    fn test_byte_slice_implementation() {
+        let data = TEST_DATA;
+        let mut buf = [0u8; 5];
+
+        // Test normal read
+        assert_eq!(data.read_at(&mut buf, 0).unwrap(), 5);
+        assert_eq!(&buf, b"Hello");
+
+        // Test offset read
+        buf.fill(0);
+        assert_eq!(data.read_at(&mut buf, 7).unwrap(), 5);
+        assert_eq!(&buf, b"World");
+
+        // Test read beyond data length
+        buf.fill(0);
+        let bytes_read = data.read_at(&mut buf, data.len() as u64).unwrap();
+        assert_eq!(bytes_read, 0);
+
+        // Test partial read at end of data
+        buf.fill(0);
+        let bytes_read = data.read_at(&mut buf, (data.len() - 3) as u64).unwrap();
+        assert_eq!(bytes_read, 3);
+        assert_eq!(&buf[..3], &data[data.len() - 3..]);
+    }
+
+    #[test]
+    fn test_cursor_implementation() {
+        let data = TEST_DATA.to_vec();
+        let cursor = Cursor::new(data.clone());
+        let mut buf = [0u8; 5];
+
+        // Test normal read
+        assert_eq!(cursor.read_at(&mut buf, 0).unwrap(), 5);
+        assert_eq!(&buf, b"Hello");
+
+        // Test offset read
+        buf.fill(0);
+        assert_eq!(cursor.read_at(&mut buf, 7).unwrap(), 5);
+        assert_eq!(&buf, b"World");
+
+        // Test read beyond data length
+        buf.fill(0);
+        let bytes_read = cursor.read_at(&mut buf, data.len() as u64).unwrap();
+        assert_eq!(bytes_read, 0);
+
+        // Test partial read at end of data
+        buf.fill(0);
+        let bytes_read = cursor.read_at(&mut buf, (data.len() - 3) as u64).unwrap();
+        assert_eq!(bytes_read, 3);
+        assert_eq!(&buf[..3], &data[data.len() - 3..]);
     }
 }
