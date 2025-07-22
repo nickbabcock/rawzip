@@ -1,9 +1,9 @@
+use crate::errors::{Error, ErrorKind};
 use std::io::Read;
 use std::ops::Range;
 #[cfg(unix)]
 use std::os::unix::fs::FileExt;
-
-use crate::errors::{Error, ErrorKind};
+use std::{rc::Rc, sync::Arc};
 
 /// Provides reading bytes at a specific offset
 ///
@@ -226,6 +226,27 @@ impl ReaderAt for Vec<u8> {
     }
 }
 
+impl<T: ReaderAt + ?Sized> ReaderAt for Arc<T> {
+    #[inline]
+    fn read_at(&self, buf: &mut [u8], offset: u64) -> std::io::Result<usize> {
+        (**self).read_at(buf, offset)
+    }
+}
+
+impl<T: ReaderAt + ?Sized> ReaderAt for Rc<T> {
+    #[inline]
+    fn read_at(&self, buf: &mut [u8], offset: u64) -> std::io::Result<usize> {
+        (**self).read_at(buf, offset)
+    }
+}
+
+impl<T: ReaderAt + ?Sized> ReaderAt for Box<T> {
+    #[inline]
+    fn read_at(&self, buf: &mut [u8], offset: u64) -> std::io::Result<usize> {
+        (**self).read_at(buf, offset)
+    }
+}
+
 /// A reader that reads a specific range of data from a [`ReaderAt`] source.
 ///
 /// `RangeReader` implements [`std::io::Read`] and provides bounded reading
@@ -336,7 +357,81 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::Read;
+    use std::io::{Cursor, Read};
+
+    const TEST_DATA: &[u8] = b"Hello, World! This is test data for ReaderAt implementations.";
+
+    fn test_reader_at_impl<R: ReaderAt>(reader: R, data_len: usize) {
+        let mut buf = [0u8; 5];
+
+        // Test reading from start
+        assert_eq!(reader.read_at(&mut buf, 0).unwrap(), 5);
+        assert_eq!(&buf, b"Hello");
+
+        // Test reading from offset
+        buf.fill(0);
+        assert_eq!(reader.read_at(&mut buf, 7).unwrap(), 5);
+        assert_eq!(&buf, b"World");
+
+        // Test read beyond data length
+        buf.fill(0);
+        let bytes_read = reader.read_at(&mut buf, data_len as u64).unwrap();
+        assert_eq!(bytes_read, 0);
+
+        // Test partial read at end of data
+        buf.fill(0);
+        let bytes_read = reader.read_at(&mut buf, (data_len - 3) as u64).unwrap();
+        assert_eq!(bytes_read, 3);
+        assert_eq!(&buf[..3], &TEST_DATA[data_len - 3..]);
+    }
+
+    #[test]
+    fn test_smart_pointer_implementations() {
+        let data = TEST_DATA.to_vec();
+
+        // Test Arc<Vec<u8>>
+        let arc_reader = Arc::new(data.clone());
+        test_reader_at_impl(&*arc_reader, data.len());
+        test_reader_at_impl(arc_reader, data.len());
+
+        // Test Rc<Vec<u8>>
+        let rc_reader = Rc::new(data.clone());
+        test_reader_at_impl(&*rc_reader, data.len());
+        test_reader_at_impl(rc_reader, data.len());
+
+        // Test Box<Vec<u8>>
+        let box_reader = Box::new(data.clone());
+        test_reader_at_impl(&*box_reader, data.len());
+        test_reader_at_impl(box_reader, data.len());
+    }
+
+    #[test]
+    fn test_reference_implementations() {
+        let mut data = TEST_DATA.to_vec();
+        let data_len = data.len();
+
+        test_reader_at_impl(&data, data_len);
+        test_reader_at_impl(&mut data, data_len);
+    }
+
+    #[test]
+    fn test_byte_slice_implementation() {
+        let data = TEST_DATA;
+        test_reader_at_impl(data, data.len());
+    }
+
+    #[test]
+    fn test_cursor_implementation() {
+        let data = TEST_DATA.to_vec();
+        let cursor = Cursor::new(data.clone());
+        test_reader_at_impl(&cursor, data.len());
+    }
+
+    #[test]
+    fn test_vec_implementation() {
+        let data = TEST_DATA.to_vec();
+        test_reader_at_impl(&data, data.len());
+    }
 
     #[test]
     fn test_range_reader_basic() {
