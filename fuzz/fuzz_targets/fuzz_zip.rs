@@ -1,7 +1,7 @@
 #![no_main]
-use std::cell::Cell;
 use libfuzzer_sys::fuzz_target;
 use rawzip::{Error, ErrorKind};
+use std::cell::Cell;
 
 fuzz_target!(|data: &[u8]| fuzz_zip(data));
 
@@ -35,6 +35,12 @@ fn fuzz_reader_zip_archive(data: &[u8], buf: &mut Vec<u8>) -> Result<(), rawzip:
     let Ok(archive) = locator.locate_in_reader(data, buf, data.len() as u64) else {
         return Ok(());
     };
+
+    let mut comment_reader = archive.comment();
+    let expected_len = comment_reader.remaining();
+    let actual = std::io::copy(&mut comment_reader, &mut std::io::sink())
+        .expect("Failed to read comment");
+    assert_eq!(actual, expected_len);
 
     let mut entries = archive.entries(buf);
     while let Ok(Some(entry)) = entries.next_entry() {

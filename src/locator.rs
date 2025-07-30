@@ -3,7 +3,7 @@ use crate::reader_at::{FileReader, ReaderAtExt};
 use crate::utils::{le_u16, le_u32, le_u64};
 use crate::{
     EndOfCentralDirectory, ReaderAt, Zip64EndOfCentralDirectory, Zip64EndOfCentralDirectoryRecord,
-    ZipArchive, ZipSliceArchive, ZipString, END_OF_CENTRAL_DIR_LOCATOR_SIGNATURE,
+    ZipArchive, ZipSliceArchive, END_OF_CENTRAL_DIR_LOCATOR_SIGNATURE,
 };
 use std::cell::RefCell;
 use std::fs::File;
@@ -25,7 +25,6 @@ const END_OF_CENTRAL_DIR_MAX_OFFSET: u64 = 1 << 20;
 /// causing the zip locator to fail to parse. One can reparse the data starting
 /// from the false EOCD offset using the reported offset
 /// [`Error::eocd_offset()`]
-/// ```
 pub struct ZipLocator {
     max_search_space: u64,
 }
@@ -74,6 +73,13 @@ impl ZipLocator {
         let eocd = EndOfCentralDirectoryRecordFixed::parse(&data[location..])?;
         let is_zip64 = eocd.is_zip64();
         let eocd = EndOfCentralDirectoryRecord::from_parts(location as u64, eocd);
+
+        // Validate comment is completely present in the slice
+        let comment_start = location + EndOfCentralDirectoryRecordFixed::SIZE;
+        let comment_len = eocd.comment_len as usize;
+        if comment_start + comment_len > data.len() {
+            return Err(Error::from(ErrorKind::Eof));
+        }
 
         if !is_zip64 {
             return EndOfCentralDirectory::create(eocd);
@@ -301,29 +307,26 @@ impl ZipLocator {
             &end_of_central_directory[EndOfCentralDirectoryRecordFixed::SIZE..];
 
         let comment_len = eocd.comment_len as usize;
-        let mut comment = vec![0u8; comment_len];
 
-        // Unhappy path: entire comment not present in the buffer
+        // Check if the rest of the buffer doesn't completely contain the comment.
         if end_of_central_directory.len() < comment_len {
-            comment[..end_of_central_directory.len()].copy_from_slice(end_of_central_directory);
             let pos = end_of_central_directory.len();
-            let result = reader.read_exact_at(
-                &mut comment[pos..],
-                eocd_offset + EndOfCentralDirectoryRecordFixed::SIZE as u64 + pos as u64,
-            );
+            let comment_offset =
+                eocd_offset + EndOfCentralDirectoryRecordFixed::SIZE as u64 + pos as u64;
+            let remaining_comment_len = comment_len - pos;
 
-            if let Err(e) = result {
+            // Try to read a single byte to validate the rest of the comment is accessible
+            let mut temp_buf = [0u8; 1];
+            let end_comment_offset = comment_offset + remaining_comment_len as u64 - 1;
+            if let Err(e) = reader.read_exact_at(&mut temp_buf, end_comment_offset) {
                 return Err((reader.inner, Error::io(e)));
             }
-        } else {
-            comment.copy_from_slice(&end_of_central_directory[..comment_len]);
         }
 
         let eocd = EndOfCentralDirectoryRecord::from_parts(eocd_offset, eocd);
-        let comment = ZipString::new(comment);
         if !is_zip64 {
             return match EndOfCentralDirectory::create(eocd) {
-                Ok(eocd) => Ok(ZipArchive::new(reader.inner, eocd, comment)),
+                Ok(eocd) => Ok(ZipArchive::new(reader.inner, eocd)),
                 Err(e) => Err((reader.inner, e)),
             };
         }
@@ -396,7 +399,7 @@ impl ZipLocator {
         let zip_eocd =
             Zip64EndOfCentralDirectory::from_parts(zip64_locator.directory_offset, zip64_record);
         match EndOfCentralDirectory::create_zip64(eocd, zip_eocd) {
-            Ok(eocd) => Ok(ZipArchive::new(reader.inner, eocd, comment)),
+            Ok(eocd) => Ok(ZipArchive::new(reader.inner, eocd)),
             Err(e) => Err((reader.inner, e)),
         }
     }
