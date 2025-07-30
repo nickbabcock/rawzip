@@ -3,7 +3,7 @@ use rawzip::extra_fields::ExtraFieldId;
 use rawzip::time::{LocalDateTime, UtcDateTime, ZipDateTimeKind};
 use rawzip::{Error, ErrorKind, ZipArchive};
 use std::fs::File;
-use std::io::Cursor;
+use std::io::{Cursor, Read};
 use std::path::Path;
 
 mod extra_data_zip_tests;
@@ -442,8 +442,12 @@ fn process_archive_files<R: rawzip::ReaderAt>(
     buf: &mut [u8],
 ) -> Result<(), Error> {
     if let Some(expected_comment_bytes) = case.comment {
+        let mut comment_reader = archive.comment();
+        let comment_len = comment_reader.remaining() as usize;
+        let mut comment_buffer = vec![0u8; comment_len];
+        comment_reader.read_exact(&mut comment_buffer).unwrap();
         assert_eq!(
-            archive.comment().as_bytes(),
+            comment_buffer.as_slice(),
             expected_comment_bytes,
             "Comment mismatch for {}",
             case.name

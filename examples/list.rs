@@ -19,11 +19,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     println!("Archive:  {}", archive_path);
 
-    if !archive.comment().as_bytes().is_empty() {
-        println!(
-            "Comment:  {}",
-            String::from_utf8_lossy(archive.comment().as_bytes())
-        );
+    let mut comment_reader = archive.comment();
+    if comment_reader.remaining() > 0 {
+        print!("Comment: ");
+        std::io::copy(&mut comment_reader, &mut std::io::stdout().lock())?;
+        println!();
     }
 
     println!();

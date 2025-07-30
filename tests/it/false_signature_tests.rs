@@ -1,4 +1,5 @@
 use rawzip::{ZipArchive, ZipLocator};
+use std::io::Read;
 
 /// Test handling of false EOCD signatures using the slice API
 #[test]
@@ -40,7 +41,11 @@ fn test_false_signature_in_reader() {
     let archive = locator
         .locate_in_reader(&zip_data, &mut buf, offset.saturating_sub(1))
         .unwrap();
-    assert_eq!(archive.comment().as_bytes(), b"This is a zipfile comment.");
+    let mut comment_reader = archive.comment();
+    let comment_len = comment_reader.remaining() as usize;
+    let mut comment_buffer = vec![0u8; comment_len];
+    comment_reader.read_exact(&mut comment_buffer).unwrap();
+    assert_eq!(comment_buffer.as_slice(), b"This is a zipfile comment.");
 }
 
 #[test]

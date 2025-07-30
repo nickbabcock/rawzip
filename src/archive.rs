@@ -6,10 +6,10 @@ use crate::mode::{
     CREATOR_NTFS, CREATOR_UNIX, CREATOR_VFAT,
 };
 use crate::path::{RawPath, ZipFilePath};
-use crate::reader_at::{FileReader, MutexReader, ReaderAtExt};
+use crate::reader_at::{FileReader, MutexReader, RangeReader, ReaderAt, ReaderAtExt};
 use crate::time::{extract_best_timestamp, ZipDateTimeKind};
 use crate::utils::{le_u16, le_u32, le_u64};
-use crate::{EndOfCentralDirectoryRecord, EndOfCentralDirectoryRecordFixed, ReaderAt, ZipLocator};
+use crate::{EndOfCentralDirectoryRecord, EndOfCentralDirectoryRecordFixed, ZipLocator};
 use std::io::{Read, Seek, Write};
 use std::num::NonZeroU64;
 
@@ -100,9 +100,8 @@ impl<T: AsRef<[u8]>> ZipSliceArchive<T> {
         let data = self.data.as_ref();
         let comment_start =
             self.eocd.tail_eocd_offset() as usize + EndOfCentralDirectoryRecordFixed::SIZE;
-        let remaining = &data[comment_start..];
         let comment_len = self.eocd.comment_len();
-        ZipStr::new(&remaining[..(comment_len).min(remaining.len())])
+        ZipStr::new(&data[comment_start..comment_start + comment_len])
     }
 
     /// Converts the [`ZipSliceArchive`] into a general [`ZipArchive`].
@@ -110,10 +109,8 @@ impl<T: AsRef<[u8]>> ZipSliceArchive<T> {
     /// This is useful for unifying code that might handle both slice-based
     /// and reader-based archives.
     pub fn into_reader(self) -> ZipArchive<T> {
-        let comment = self.comment().into_owned();
         ZipArchive {
             reader: self.data,
-            comment,
             eocd: self.eocd,
         }
     }
@@ -322,7 +319,6 @@ impl<'data> Iterator for ZipSliceEntries<'data> {
 #[derive(Debug, Clone)]
 pub struct ZipArchive<R> {
     reader: R,
-    comment: ZipString,
     eocd: EndOfCentralDirectory,
 }
 
@@ -382,12 +378,8 @@ impl ZipArchive<()> {
 }
 
 impl<R> ZipArchive<R> {
-    pub(crate) fn new(reader: R, eocd: EndOfCentralDirectory, comment: ZipString) -> Self {
-        ZipArchive {
-            reader,
-            eocd,
-            comment,
-        }
+    pub(crate) fn new(reader: R, eocd: EndOfCentralDirectory) -> Self {
+        ZipArchive { reader, eocd }
     }
 
     /// Returns a reference to the underlying reader.
@@ -439,9 +431,36 @@ impl<R> ZipArchive<R> {
         self.eocd.entries()
     }
 
-    /// Returns the comment of the zip archive, if any.
-    pub fn comment(&self) -> ZipStr {
-        self.comment.as_str()
+    /// Returns a Read implementation for the comment of the zip archive.
+    ///
+    /// Use [`RangeReader::remaining()`] to get the comment length before
+    /// reading. It is guaranteed to be less than `u16::MAX`.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use rawzip::{ZipArchive, ZipStr, RECOMMENDED_BUFFER_SIZE};
+    /// use std::io::Read;
+    /// use std::fs::File;
+    ///
+    /// let file = File::open("assets/test.zip")?;
+    /// let mut buffer = vec![0u8; RECOMMENDED_BUFFER_SIZE];
+    /// let archive = ZipArchive::from_file(file, &mut buffer)?;
+    ///
+    /// let mut comment_reader = archive.comment();
+    /// let comment_len = comment_reader.remaining() as usize;
+    /// comment_reader.read_exact(&mut buffer[..comment_len])?;
+    ///
+    /// let actual = ZipStr::new(&buffer[..comment_len]);
+    /// let expected = ZipStr::new(b"This is a zipfile comment.");
+    /// assert_eq!(expected, actual);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub fn comment(&self) -> RangeReader<&R> {
+        let comment_start =
+            self.eocd.tail_eocd_offset() + EndOfCentralDirectoryRecordFixed::SIZE as u64;
+        let comment_end = comment_start + self.eocd.comment_len() as u64;
+        RangeReader::new(&self.reader, comment_start..comment_end)
     }
 
     /// Returns the offset of the End of Central Directory (EOCD) signature.
@@ -533,12 +552,13 @@ where
     R: ReaderAt,
 {
     /// Returns a [`ZipReader`] for reading the compressed data of this entry.
-    pub fn reader(&self) -> ZipReader<'archive, R> {
+    pub fn reader(&self) -> ZipReader<&'archive R> {
         ZipReader {
-            archive: self.archive,
             entry: self.entry,
-            offset: self.body_offset,
-            end_offset: self.body_end_offset,
+            range_reader: RangeReader::new(
+                self.archive.get_ref(),
+                self.body_offset..self.body_end_offset,
+            ),
         }
     }
 
@@ -701,14 +721,12 @@ where
 
 /// A reader for a Zip entry's compressed data.
 #[derive(Debug, Clone)]
-pub struct ZipReader<'archive, R> {
-    archive: &'archive ZipArchive<R>,
+pub struct ZipReader<R> {
     entry: ZipArchiveEntryWayfinder,
-    offset: u64,
-    end_offset: u64,
+    range_reader: RangeReader<R>,
 }
 
-impl<R> ZipReader<'_, R>
+impl<R> ZipReader<R>
 where
     R: ReaderAt,
 {
@@ -722,7 +740,9 @@ where
         let expected_size = self.entry.uncompressed_size_hint();
 
         let expected_crc = if self.entry.has_data_descriptor {
-            DataDescriptor::read_at(&self.archive.reader, self.end_offset).map(|x| x.crc)?
+            let end_offset = self.range_reader.end_offset();
+            let archive = self.range_reader.into_inner();
+            DataDescriptor::read_at(archive, end_offset).map(|x| x.crc)?
         } else {
             self.entry.crc
         };
@@ -734,18 +754,12 @@ where
     }
 }
 
-impl<R> Read for ZipReader<'_, R>
+impl<R> Read for ZipReader<R>
 where
     R: ReaderAt,
 {
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
-        let read_size = buf.len().min((self.end_offset - self.offset) as usize);
-        let read = self
-            .archive
-            .reader
-            .read_at(&mut buf[..read_size], self.offset)?;
-        self.offset += read as u64;
-        Ok(read)
+        self.range_reader.read(buf)
     }
 }
 
@@ -1429,6 +1443,8 @@ impl<'a> ZipFileHeaderRecord<'a> {
     /// The minimum of all local header offsets (or `directory_offset()` when a
     /// zip is empty), will be the length of prelude data in a zip archive (data
     /// that is unrelated to the zip archive).
+    ///
+    /// See [`RangeReader`] for an example.
     #[inline]
     pub fn local_header_offset(&self) -> u64 {
         self.local_header_offset
