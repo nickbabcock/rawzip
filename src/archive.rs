@@ -5,10 +5,10 @@ use crate::mode::{
     CREATOR_NTFS, CREATOR_UNIX, CREATOR_VFAT,
 };
 use crate::path::{RawPath, ZipFilePath};
-use crate::reader_at::{FileReader, MutexReader, ReaderAtExt};
+use crate::reader_at::{FileReader, MutexReader, RangeReader, ReaderAt, ReaderAtExt};
 use crate::time::{extract_best_timestamp, ZipDateTimeKind};
 use crate::utils::{le_u16, le_u32, le_u64};
-use crate::{EndOfCentralDirectoryRecord, EndOfCentralDirectoryRecordFixed, ReaderAt, ZipLocator};
+use crate::{EndOfCentralDirectoryRecord, EndOfCentralDirectoryRecordFixed, ZipLocator};
 use std::io::{Read, Seek, Write};
 use std::num::NonZeroU64;
 
@@ -512,12 +512,13 @@ where
     R: ReaderAt,
 {
     /// Returns a [`ZipReader`] for reading the compressed data of this entry.
-    pub fn reader(&self) -> ZipReader<'archive, R> {
+    pub fn reader(&self) -> ZipReader<&'archive R> {
         ZipReader {
-            archive: self.archive,
             entry: self.entry,
-            offset: self.body_offset,
-            end_offset: self.body_end_offset,
+            range_reader: RangeReader::new(
+                self.archive.get_ref(),
+                self.body_offset..self.body_end_offset,
+            ),
         }
     }
 
@@ -680,14 +681,12 @@ where
 
 /// A reader for a Zip entry's compressed data.
 #[derive(Debug, Clone)]
-pub struct ZipReader<'archive, R> {
-    archive: &'archive ZipArchive<R>,
+pub struct ZipReader<R> {
     entry: ZipArchiveEntryWayfinder,
-    offset: u64,
-    end_offset: u64,
+    range_reader: RangeReader<R>,
 }
 
-impl<R> ZipReader<'_, R>
+impl<R> ZipReader<R>
 where
     R: ReaderAt,
 {
@@ -701,7 +700,9 @@ where
         let expected_size = self.entry.uncompressed_size_hint();
 
         let expected_crc = if self.entry.has_data_descriptor {
-            DataDescriptor::read_at(&self.archive.reader, self.end_offset).map(|x| x.crc)?
+            let end_offset = self.range_reader.end_offset();
+            let archive = self.range_reader.into_inner();
+            DataDescriptor::read_at(archive, end_offset).map(|x| x.crc)?
         } else {
             self.entry.crc
         };
@@ -713,18 +714,12 @@ where
     }
 }
 
-impl<R> Read for ZipReader<'_, R>
+impl<R> Read for ZipReader<R>
 where
     R: ReaderAt,
 {
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
-        let read_size = buf.len().min((self.end_offset - self.offset) as usize);
-        let read = self
-            .archive
-            .reader
-            .read_at(&mut buf[..read_size], self.offset)?;
-        self.offset += read as u64;
-        Ok(read)
+        self.range_reader.read(buf)
     }
 }
 

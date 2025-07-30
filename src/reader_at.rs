@@ -1,3 +1,5 @@
+use std::io::Read;
+use std::ops::Range;
 #[cfg(unix)]
 use std::os::unix::fs::FileExt;
 
@@ -221,5 +223,185 @@ impl ReaderAt for Vec<u8> {
     #[inline]
     fn read_at(&self, buf: &mut [u8], offset: u64) -> std::io::Result<usize> {
         self.as_slice().read_at(buf, offset)
+    }
+}
+
+/// A reader that reads a specific range of data from a [`ReaderAt`] source.
+///
+/// `RangeReader` implements [`std::io::Read`] and provides bounded reading
+/// within a specified range of offsets. It maintains its current position and
+/// ensures reads don't exceed the defined end boundary.
+///
+/// Also useful for when interoperating with APIs that work with
+/// [`std::io::Read`] instead of [`ReaderAt`]
+///
+/// # Examples
+///
+/// ```
+/// use std::io::Read;
+/// use rawzip::{RangeReader, ReaderAt};
+///
+/// let data = b"Hello, World! This is test data.";
+///
+/// // Create a RangeReader that reads bytes 7-12 ("World")
+/// let mut range_reader = RangeReader::new(data.as_slice(), 7..13);
+///
+/// let mut buffer = [0u8; 10];
+/// let bytes_read = range_reader.read(&mut buffer).unwrap();
+/// assert_eq!(&buffer[..bytes_read], b"World!");
+/// ```
+#[derive(Debug, Clone)]
+pub struct RangeReader<R> {
+    archive: R,
+    offset: u64,
+    end_offset: u64,
+}
+
+impl<R> RangeReader<R> {
+    /// Creates a new `RangeReader` that will read data from the specified range.
+    #[inline]
+    pub fn new(archive: R, range: Range<u64>) -> Self {
+        Self {
+            archive,
+            offset: range.start,
+            end_offset: range.end,
+        }
+    }
+
+    /// Returns the current read position within the range.
+    #[inline]
+    pub fn position(&self) -> u64 {
+        self.offset
+    }
+
+    /// Returns the remaining bytes that can be read from the current position.
+    #[inline]
+    pub fn remaining(&self) -> u64 {
+        self.end_offset - self.offset
+    }
+
+    /// Returns the end offset of the range.
+    #[inline]
+    pub fn end_offset(&self) -> u64 {
+        self.end_offset
+    }
+
+    /// Returns a reference to the underlying reader.
+    #[inline]
+    pub fn get_ref(&self) -> &R {
+        &self.archive
+    }
+
+    /// Consumes the self and returns the underlying reader.
+    #[inline]
+    pub fn into_inner(self) -> R {
+        self.archive
+    }
+}
+
+impl<R> Read for RangeReader<R>
+where
+    R: ReaderAt,
+{
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        let read_size = buf.len().min(self.remaining() as usize);
+        let read = self.archive.read_at(&mut buf[..read_size], self.offset)?;
+        self.offset += read as u64;
+        Ok(read)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Read;
+
+    #[test]
+    fn test_range_reader_basic() {
+        let data = b"Hello, World! This is test data.";
+        let mut range_reader = RangeReader::new(data.as_slice(), 7..13);
+
+        let mut buffer = [0u8; 10];
+        let bytes_read = range_reader.read(&mut buffer).unwrap();
+
+        assert_eq!(bytes_read, 6);
+        assert_eq!(&buffer[..bytes_read], b"World!");
+    }
+
+    #[test]
+    fn test_range_reader_multiple_reads() {
+        let data = b"0123456789";
+        let mut range_reader = RangeReader::new(data.as_slice(), 2..8);
+
+        let mut buffer = [0u8; 3];
+        let bytes_read1 = range_reader.read(&mut buffer).unwrap();
+        assert_eq!(bytes_read1, 3);
+        assert_eq!(&buffer[..bytes_read1], b"234");
+        assert_eq!(range_reader.position(), 5);
+
+        let bytes_read2 = range_reader.read(&mut buffer).unwrap();
+        assert_eq!(bytes_read2, 3);
+        assert_eq!(&buffer[..bytes_read2], b"567");
+        assert_eq!(range_reader.position(), 8);
+
+        // Should return 0 when at end
+        let bytes_read3 = range_reader.read(&mut buffer).unwrap();
+        assert_eq!(bytes_read3, 0);
+    }
+
+    #[test]
+    fn test_range_reader_empty_range() {
+        let data = b"Hello, World!";
+        let mut range_reader = RangeReader::new(data.as_slice(), 5..5);
+
+        let mut buffer = [0u8; 10];
+        let bytes_read = range_reader.read(&mut buffer).unwrap();
+
+        assert_eq!(bytes_read, 0);
+        assert_eq!(range_reader.remaining(), 0);
+    }
+
+    #[test]
+    fn test_range_reader_get_ref_and_into_inner() {
+        let data = b"Hello, World!";
+        let range_reader = RangeReader::new(data.as_slice(), 0..5);
+
+        assert_eq!(range_reader.get_ref(), &data.as_slice());
+        let inner = range_reader.into_inner();
+        assert_eq!(inner, data.as_slice());
+    }
+
+    #[test]
+    fn test_range_reader_clone() {
+        let data = b"Hello, World!";
+        let range_reader = RangeReader::new(data.as_slice(), 0..5);
+        let cloned = range_reader.clone();
+
+        assert_eq!(range_reader.position(), cloned.position());
+        assert_eq!(range_reader.remaining(), cloned.remaining());
+    }
+
+    #[test]
+    fn test_range_reader_range_exceeds_data() {
+        let data = b"Hello";
+        
+        // Test range that starts within data but extends beyond
+        let mut reader1 = RangeReader::new(data.as_slice(), 3..10);
+        let mut buf1 = [0u8; 10];
+        let read1 = reader1.read(&mut buf1).unwrap();
+        assert_eq!(read1, 2);  // Only reads "lo"
+        assert_eq!(&buf1[..read1], b"lo");
+        
+        // Test range that starts at end of data
+        let mut reader2 = RangeReader::new(data.as_slice(), 5..10);
+        let mut buf2 = [0u8; 10];
+        let read2 = reader2.read(&mut buf2).unwrap();
+        assert_eq!(read2, 0);  // No data to read
+        
+        // Test range that starts beyond data
+        let mut reader3 = RangeReader::new(data.as_slice(), 10..20);
+        let mut buf3 = [0u8; 10];
+        let read3 = reader3.read(&mut buf3).unwrap();
+        assert_eq!(read3, 0);  // No data to read
     }
 }
