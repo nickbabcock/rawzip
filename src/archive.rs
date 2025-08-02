@@ -95,6 +95,15 @@ impl<T: AsRef<[u8]>> ZipSliceArchive<T> {
         self.eocd.directory_offset()
     }
 
+    /// Returns the offset where the ZIP archive ends.
+    ///
+    /// See [`ZipArchive::end_offset`] for more details.
+    pub fn end_offset(&self) -> u64 {
+        self.eocd.eocd_offset
+            + EndOfCentralDirectoryRecordFixed::SIZE as u64
+            + self.comment().as_bytes().len() as u64
+    }
+
     /// The comment of the zip file.
     pub fn comment(&self) -> ZipStr {
         let data = self.data.as_ref();
@@ -501,6 +510,25 @@ impl<R> ZipArchive<R> {
     /// [`ZipFileHeaderRecord::local_header_offset`] can be examined.
     pub fn directory_offset(&self) -> u64 {
         self.eocd.directory_offset()
+    }
+
+    /// Returns the offset where the ZIP archive ends.
+    ///
+    /// This returns the position immediately after the last byte of the ZIP
+    /// archive, including the End of Central Directory record and any comment.
+    /// This is useful for extracting trailing data.
+    ///
+    /// The calculation does not rely on any self reported values from the
+    /// archive.
+    ///
+    /// This can be used in conjunction with the starting offset calculation
+    /// start offset as shown in [`RangeReader`] to determine the exact byte
+    /// range (and thus size) of the ZIP archive within a context of a larger
+    /// file.
+    pub fn end_offset(&self) -> u64 {
+        self.eocd.eocd_offset
+            + EndOfCentralDirectoryRecordFixed::SIZE as u64
+            + self.comment().remaining()
     }
 }
 
