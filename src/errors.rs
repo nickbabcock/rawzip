@@ -5,6 +5,21 @@ pub struct Error {
 }
 
 impl Error {
+    /// Returns the offset of the end of central directory (EOCD) signature
+    ///
+    /// Useful for reparsing input that contains a false EOCD signature.
+    pub fn eocd_offset(&self) -> Option<u64> {
+        self.inner.eocd_offset
+    }
+
+    /// Sets the false signature offset on this error
+    pub(crate) fn with_eocd_offset(mut self, offset: u64) -> Self {
+        self.inner.eocd_offset = Some(offset);
+        self
+    }
+}
+
+impl Error {
     pub(crate) fn io(err: std::io::Error) -> Error {
         Error::from(ErrorKind::IO(err))
     }
@@ -26,6 +41,7 @@ impl Error {
 #[derive(Debug)]
 struct ErrorInner {
     kind: ErrorKind,
+    eocd_offset: Option<u64>,
 }
 
 /// The kind of error that occurred
@@ -118,7 +134,10 @@ impl std::fmt::Display for ErrorKind {
 impl From<ErrorKind> for Error {
     fn from(kind: ErrorKind) -> Error {
         Error {
-            inner: Box::new(ErrorInner { kind }),
+            inner: Box::new(ErrorInner {
+                kind,
+                eocd_offset: None,
+            }),
         }
     }
 }
