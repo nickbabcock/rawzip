@@ -18,8 +18,14 @@ const END_OF_CENTRAL_DIR_MAX_OFFSET: u64 = 1 << 20;
 
 /// Locates the End of Central Directory (EOCD) record in a ZIP archive.
 ///
-/// The `ZipLocator` is responsible for finding the EOCD record, which is crucial
-/// for reading the contents of a ZIP file.
+/// The `ZipLocator` is responsible for finding the EOCD record, which is
+/// crucial for reading the contents of a ZIP file.
+///
+/// In the event, that the comment or tailing data contains the EOCD signature,
+/// causing the zip locator to fail to parse. One can reparse the data starting
+/// from the false EOCD offset using the reported offset
+/// [`Error::eocd_offset()`]
+/// ```
 pub struct ZipLocator {
     max_search_space: u64,
 }
@@ -56,6 +62,15 @@ impl ZipLocator {
         let location = find_end_of_central_dir_signature(data, self.max_search_space as usize)
             .ok_or(ErrorKind::MissingEndOfCentralDirectory)?;
 
+        self.locate_in_byte_slice_impl(data, location)
+            .map_err(|e| e.with_eocd_offset(location as u64))
+    }
+
+    fn locate_in_byte_slice_impl(
+        &self,
+        data: &[u8],
+        location: usize,
+    ) -> Result<EndOfCentralDirectory, Error> {
         let eocd = EndOfCentralDirectoryRecordFixed::parse(&data[location..])?;
         let is_zip64 = eocd.is_zip64();
 
@@ -230,6 +245,21 @@ impl ZipLocator {
             }
         };
 
+        self.locate_in_reader_impl(reader, buffer, stream_pos, buffer_pos, buffer_valid_len)
+            .map_err(|(reader, e)| (reader, e.with_eocd_offset(stream_pos)))
+    }
+
+    fn locate_in_reader_impl<R>(
+        &self,
+        reader: R,
+        buffer: &mut [u8],
+        stream_pos: u64,
+        buffer_pos: usize,
+        buffer_valid_len: usize,
+    ) -> Result<ZipArchive<R>, (R, Error)>
+    where
+        R: ReaderAt,
+    {
         // Most likely the single read to find the end of the central directory
         // will fill the buffer with entire end of the central directory (and
         // optionally zip64 end of central directory). So let's try and reuse
@@ -648,7 +678,10 @@ mod tests {
             find_end_of_central_dir(reader, &mut buffer, max_search_space, data.len() as u64)
                 .unwrap();
 
-        assert_eq!(mem.map(|x| x as u64), curse.map(|(a, _, _)| a));
+        let mem_result = mem.map(|x| x as u64);
+        let curse_result = curse.map(|(a, _, _)| a);
+        assert_eq!(mem_result, curse_result);
+
         if let Some((_, buffer_index, buffer_valid_len)) = curse {
             assert!(buffer_valid_len > 0, "buffer_valid_len should be positive");
             assert!(
@@ -711,7 +744,8 @@ mod tests {
         let found =
             find_end_of_central_dir(cursor, &mut buffer, max_search_space, input.len() as u64)
                 .unwrap();
-        assert_eq!(found.map(|(a, _, _)| a), expected);
+        let found_result = found.map(|(a, _, _)| a);
+        assert_eq!(found_result, expected);
 
         if expected.is_some() {
             let (_, buffer_pos, buffer_valid_len) = found.unwrap();
