@@ -65,4 +65,9 @@ fn test_concatenated_zip_files() {
     let mut entries_iter = first_archive.entries(&mut buffer);
     let entry = entries_iter.next_entry().unwrap().unwrap();
     assert_eq!(entry.file_path().as_ref(), b"first.txt");
+
+    // Verify that we can also recover the prefix data for the second ZIP
+    let first_archive_end = first_archive.end_offset();
+    let second_prefix = &data[first_archive_end as usize..second_archive.base_offset() as usize];
+    assert_eq!(second_prefix, b"PREFIX_FOR_SECOND_ZIP\n");
 }

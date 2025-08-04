@@ -83,6 +83,15 @@ impl<T: AsRef<[u8]>> ZipSliceArchive<T> {
         self.eocd.base_offset()
     }
 
+    /// Returns the offset where the ZIP archive ends.
+    ///
+    /// See [`ZipArchive::end_offset`] for more details.
+    pub fn end_offset(&self) -> u64 {
+        self.eocd.stream_pos
+            + EndOfCentralDirectoryRecordFixed::SIZE as u64
+            + self.comment().as_bytes().len() as u64
+    }
+
     /// The comment of the zip file.
     pub fn comment(&self) -> ZipStr {
         let data = self.data.as_ref();
@@ -429,6 +438,25 @@ impl<R> ZipArchive<R> {
     /// is embedded within a larger file (e.g., a self-extracting archive).
     pub fn base_offset(&self) -> u64 {
         self.eocd.base_offset()
+    }
+
+    /// Returns the offset where the ZIP archive ends.
+    ///
+    /// This returns the position immediately after the last byte of the ZIP
+    /// archive, including the End of Central Directory record and any comment.
+    /// This is useful for extracting trailing data.
+    ///
+    /// The calculation does not rely on any self reported values from the
+    /// archive, so in the case that a comment is truncated in the stream, the
+    /// end offset will represent what the underlying reader actually contains.
+    ///
+    /// This can be used in conjunction with [`ZipArchive::base_offset`] to
+    /// determine the exact byte range (and thus size) of the ZIP archive within
+    /// the larger file.
+    pub fn end_offset(&self) -> u64 {
+        self.eocd.stream_pos
+            + EndOfCentralDirectoryRecordFixed::SIZE as u64
+            + self.comment().as_bytes().len() as u64
     }
 }
 
