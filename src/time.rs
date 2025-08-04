@@ -88,7 +88,10 @@
 //! assert!(has_utc_timestamp, "Output should contain UTC timestamps");
 //! ```
 
-use crate::utils::{le_u16, le_u32, le_u64};
+use crate::{
+    extra_fields::{ExtraFieldId, ExtraFields},
+    utils::{le_u16, le_u32, le_u64},
+};
 
 /// Represents the time zone of a timestamp.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -551,53 +554,35 @@ impl From<&ZipDateTime> for DosDateTime {
     }
 }
 
-// Extra field IDs for various timestamp formats
-pub(crate) const EXTENDED_TIMESTAMP_ID: u16 = 0x5455; // "UT" - Extended timestamp
-const UNIX_TIMESTAMP_ID: u16 = 0x5855; // "UX" - Unix timestamp (obsolete)
-const NTFS_TIMESTAMP_ID: u16 = 0x000a; // NTFS timestamp
-
 /// Extracts timestamp from the extra field using "last wins" strategy.
 /// Returns the last valid timestamp found, or falls back to MS-DOS if none found.
 /// This matches Go's zip reader behavior.
 pub(crate) fn extract_best_timestamp(
-    extra_field: &[u8],
+    extra_fields: ExtraFields<'_>,
     dos_time: u16,
     dos_date: u16,
 ) -> ZipDateTimeKind {
-    let mut pos = 0;
     let mut last_timestamp = None;
 
-    while pos + 4 <= extra_field.len() {
-        let field_id = le_u16(&extra_field[pos..pos + 2]);
-        let field_size = le_u16(&extra_field[pos + 2..pos + 4]) as usize;
-        pos += 4;
-
-        if pos + field_size > extra_field.len() {
-            break;
-        }
-
-        let field_data = &extra_field[pos..pos + field_size];
-
+    for (field_id, field_data) in extra_fields {
         match field_id {
-            NTFS_TIMESTAMP_ID => {
+            ExtraFieldId::NTFS => {
                 if let Some(timestamp) = parse_ntfs_timestamp(field_data) {
                     last_timestamp = Some(ZipDateTimeKind::Utc(timestamp));
                 }
             }
-            EXTENDED_TIMESTAMP_ID => {
+            ExtraFieldId::EXTENDED_TIMESTAMP => {
                 if let Some(timestamp) = parse_extended_timestamp(field_data) {
                     last_timestamp = Some(ZipDateTimeKind::Utc(timestamp));
                 }
             }
-            UNIX_TIMESTAMP_ID => {
+            ExtraFieldId::INFO_ZIP_UNIX_ORIGINAL => {
                 if let Some(timestamp) = parse_unix_timestamp(field_data) {
                     last_timestamp = Some(ZipDateTimeKind::Utc(timestamp));
                 }
             }
             _ => {}
         }
-
-        pos += field_size;
     }
 
     // Return the last timestamp found, or fall back to MS-DOS

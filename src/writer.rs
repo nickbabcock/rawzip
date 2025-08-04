@@ -1,9 +1,10 @@
 use crate::{
     crc,
     errors::ErrorKind,
+    extra_fields::ExtraFieldId,
     mode::CREATOR_UNIX,
     path::{NormalizedPath, NormalizedPathBuf, ZipFilePath},
-    time::{DosDateTime, UtcDateTime, EXTENDED_TIMESTAMP_ID},
+    time::{DosDateTime, UtcDateTime},
     CompressionMethod, DataDescriptor, Error, ZipLocalFileHeaderFixed, CENTRAL_HEADER_SIGNATURE,
     END_OF_CENTRAL_DIR_LOCATOR_SIGNATURE, END_OF_CENTRAL_DIR_SIGNATURE64,
     END_OF_CENTRAL_DIR_SIGNAUTRE_BYTES,
@@ -834,7 +835,7 @@ where
         return Ok(());
     };
     let unix_time = datetime.to_unix().max(0) as u32; // ZIP format uses u32 for Unix timestamps, clamp negatives to 0
-    writer.write_all(&EXTENDED_TIMESTAMP_ID.to_le_bytes())?;
+    writer.write_all(&ExtraFieldId::EXTENDED_TIMESTAMP.as_u16().to_le_bytes())?;
     writer.write_all(&5u16.to_le_bytes())?; // Size: 1 byte flags + 4 bytes timestamp
     writer.write_all(&1u8.to_le_bytes())?; // Flags: modification time present
     writer.write_all(&unix_time.to_le_bytes())?; // Unix timestamp
