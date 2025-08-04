@@ -4,6 +4,7 @@
 mod archive;
 mod crc;
 mod errors;
+pub mod extra_fields;
 mod locator;
 mod mode;
 pub mod path;
