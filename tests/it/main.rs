@@ -1,6 +1,7 @@
 use quickcheck_macros::quickcheck;
+use rawzip::extra_fields::ExtraFieldId;
 use rawzip::time::{LocalDateTime, UtcDateTime, ZipDateTimeKind};
-use rawzip::{Error, ErrorKind};
+use rawzip::{Error, ErrorKind, ZipArchive};
 use std::fs::File;
 use std::io::{Cursor, Write};
 use std::path::Path;
@@ -849,4 +850,29 @@ fn test_zip_with_prepended_data() {
     let wayfinder1 = entry1.wayfinder();
     let ent1 = archive.get_entry(wayfinder1).unwrap();
     assert_eq!(ent1.data(), b"Hello, world!");
+}
+
+#[test]
+fn test_java_jar_cafe_extra_field() {
+    let file = std::fs::File::open("assets/test.jar").expect("Failed to open test.jar");
+    let mut buf = vec![0u8; rawzip::RECOMMENDED_BUFFER_SIZE];
+    let archive = ZipArchive::from_file(file, &mut buf).expect("Failed to create ZipArchive");
+
+    let mut entries = archive.entries(&mut buf);
+    let entry = entries.next_entry().unwrap().unwrap();
+    let mut extra_fields = entry.extra_fields();
+
+    let mut found = false;
+    for (field_id, _field_data) in extra_fields.by_ref() {
+        if field_id == ExtraFieldId::JAVA_JAR {
+            found = true;
+            break;
+        }
+    }
+
+    assert!(found, "Expected to find JAVA_JAR extra field (CAFE)");
+    assert!(
+        extra_fields.remaining_bytes().is_empty(),
+        "No remaining bytes expected after consuming fields"
+    );
 }
