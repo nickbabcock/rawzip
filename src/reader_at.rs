@@ -232,8 +232,9 @@ impl ReaderAt for Vec<u8> {
 /// within a specified range of offsets. It maintains its current position and
 /// ensures reads don't exceed the defined end boundary.
 ///
-/// Also useful for when interoperating with APIs that work with
-/// [`std::io::Read`] instead of [`ReaderAt`]
+/// Useful when working with APIs that operate on [`std::io::Read`] instead of
+/// [`ReaderAt`]. For instance, incrementally reading large prelude and trailing
+/// data of a ZIP file.
 ///
 /// # Examples
 ///
@@ -384,24 +385,24 @@ mod tests {
     #[test]
     fn test_range_reader_range_exceeds_data() {
         let data = b"Hello";
-        
+
         // Test range that starts within data but extends beyond
         let mut reader1 = RangeReader::new(data.as_slice(), 3..10);
         let mut buf1 = [0u8; 10];
         let read1 = reader1.read(&mut buf1).unwrap();
-        assert_eq!(read1, 2);  // Only reads "lo"
+        assert_eq!(read1, 2); // Only reads "lo"
         assert_eq!(&buf1[..read1], b"lo");
-        
+
         // Test range that starts at end of data
         let mut reader2 = RangeReader::new(data.as_slice(), 5..10);
         let mut buf2 = [0u8; 10];
         let read2 = reader2.read(&mut buf2).unwrap();
-        assert_eq!(read2, 0);  // No data to read
-        
+        assert_eq!(read2, 0); // No data to read
+
         // Test range that starts beyond data
         let mut reader3 = RangeReader::new(data.as_slice(), 10..20);
         let mut buf3 = [0u8; 10];
         let read3 = reader3.read(&mut buf3).unwrap();
-        assert_eq!(read3, 0);  // No data to read
+        assert_eq!(read3, 0); // No data to read
     }
 }

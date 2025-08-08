@@ -17,5 +17,5 @@ pub use crc::crc32;
 pub use errors::{Error, ErrorKind};
 pub use locator::*;
 pub use mode::EntryMode;
-pub use reader_at::{FileReader, ReaderAt, RangeReader};
+pub use reader_at::{FileReader, RangeReader, ReaderAt};
 pub use writer::*;
