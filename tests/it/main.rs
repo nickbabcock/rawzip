@@ -2,7 +2,7 @@ use quickcheck_macros::quickcheck;
 use rawzip::time::{LocalDateTime, UtcDateTime, ZipDateTimeKind};
 use rawzip::{Error, ErrorKind};
 use std::fs::File;
-use std::io::{Cursor, Write};
+use std::io::Cursor;
 use std::path::Path;
 
 mod concatenated_zip_tests;
@@ -809,44 +809,37 @@ fn test_read_what_we_write_slice(data: Vec<u8>) {
 }
 
 #[test]
-fn test_zip_with_prepended_data() {
-    let prefix_data = b"This is some prefix data that comes before the ZIP file\nLine 2\nLine 3\n";
-
-    // Create a writer with the prefix data already in it
-    let mut output = Vec::new();
-    output.extend_from_slice(prefix_data);
-
-    // Create ZIP archive starting after the prefix data
-    {
-        let mut archive = rawzip::ZipArchiveWriter::new(&mut output);
-
-        // Add a file to the archive
-        let mut file = archive.new_file("test.txt").create().unwrap();
-        let mut writer = rawzip::ZipDataWriter::new(&mut file);
-        writer.write_all(b"Hello, world!").unwrap();
-        let (_, descriptor) = writer.finish().unwrap();
-        file.finish(descriptor).unwrap();
-
-        archive.finish().unwrap();
+fn test_zip_with_secret_prelude() {
+    // A secret prelude is where a non zip64 file is preceded by data but is not
+    // captured in the reported central directory offset. This is recoverable
+    // (only for non zip64 files) as we can compare the expected eocd offset
+    // with the actual offset.
+    let cases = [("assets/test.zip", 2)];
+    for (asset, entries_count) in cases {
+        let data = std::fs::read(asset).unwrap();
+        let data = [&[0u8; 1000], data.as_slice()].concat();
+        let archive = rawzip::ZipArchive::from_slice(&data).unwrap();
+        let zip_start_offset = archive.base_offset();
+        let extracted_prefix = &data[..zip_start_offset as usize];
+        assert_eq!(extracted_prefix, &[0u8; 1000]);
+        let entries: Vec<_> = archive.entries().collect();
+        assert_eq!(entries.len(), entries_count);
     }
 
-    let archive = rawzip::ZipArchive::from_slice(&output).unwrap();
-    let zip_start_offset = archive.base_offset();
-
-    // Verify we can extract the prefix data using the base offset
-    let extracted_prefix = &output[..zip_start_offset as usize];
-    assert_eq!(extracted_prefix, prefix_data);
-
-    let entries: Vec<_> = archive.entries().collect();
-    assert_eq!(entries.len(), 1);
-
-    // Check first file
-    let entry1 = entries[0].as_ref().unwrap();
-    assert_eq!(
-        entry1.file_path().try_normalize().unwrap().as_ref(),
-        "test.txt"
-    );
-    let wayfinder1 = entry1.wayfinder();
-    let ent1 = archive.get_entry(wayfinder1).unwrap();
-    assert_eq!(ent1.data(), b"Hello, world!");
+    let mut buf = vec![0u8; rawzip::RECOMMENDED_BUFFER_SIZE];
+    for (asset, entries_count) in cases  {
+        let data = std::fs::read(asset).unwrap();
+        let data = [&[0u8; 1000], data.as_slice()].concat();
+        let locator = rawzip::ZipLocator::new();
+        let archive = locator.locate_in_reader(&data, &mut buf, data.len() as u64).unwrap();
+        let zip_start_offset = archive.base_offset();
+        let extracted_prefix = &data[..zip_start_offset as usize];
+        assert_eq!(extracted_prefix, &[0u8; 1000]);
+        let mut count = 0;
+        let mut entries = archive.entries(&mut buf);
+        while entries.next_entry().unwrap().is_some() {
+            count += 1;
+        }
+        assert_eq!(count, entries_count);
+    }
 }
