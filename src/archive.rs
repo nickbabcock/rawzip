@@ -10,6 +10,7 @@ use crate::time::{extract_best_timestamp, ZipDateTimeKind};
 use crate::utils::{le_u16, le_u32, le_u64};
 use crate::{EndOfCentralDirectoryRecord, EndOfCentralDirectoryRecordFixed, ReaderAt, ZipLocator};
 use std::io::{Read, Seek, Write};
+use std::num::NonZeroU64;
 
 pub(crate) const END_OF_CENTRAL_DIR_SIGNATURE64: u32 = 0x06064b50;
 pub(crate) const END_OF_CENTRAL_DIR_LOCATOR_SIGNATURE: u32 = 0x07064b50;
@@ -45,16 +46,20 @@ pub const RECOMMENDED_BUFFER_SIZE: usize = 1 << 16;
 /// ```
 #[derive(Debug, Clone)]
 pub struct ZipSliceArchive<T: AsRef<[u8]>> {
-    pub(crate) data: T,
-    pub(crate) eocd: EndOfCentralDirectory,
+    data: T,
+    eocd: EndOfCentralDirectory,
 }
 
 impl<T: AsRef<[u8]>> ZipSliceArchive<T> {
+    pub(crate) fn new(data: T, eocd: EndOfCentralDirectory) -> Self {
+        ZipSliceArchive { data, eocd }
+    }
+
     /// Returns an iterator over the entries in the central directory of the archive.
     pub fn entries(&self) -> ZipSliceEntries {
         let data = self.data.as_ref();
         let entry_data =
-            &data[(self.eocd.offset() as usize).min(data.len())..self.eocd.end_position() as usize];
+            &data[(self.eocd.directory_offset() as usize)..self.eocd.head_eocd_offset() as usize];
         ZipSliceEntries {
             entry_data,
             base_offset: self.eocd.base_offset(),
@@ -87,13 +92,14 @@ impl<T: AsRef<[u8]>> ZipSliceArchive<T> {
     ///
     /// See [`ZipSliceArchive::eocd_offset()`] for more details.
     pub fn eocd_offset(&self) -> u64 {
-        self.eocd.eocd.offset
+        self.eocd.tail_eocd_offset()
     }
 
     /// The comment of the zip file.
     pub fn comment(&self) -> ZipStr {
         let data = self.data.as_ref();
-        let comment_start = self.eocd.eocd.offset as usize + EndOfCentralDirectoryRecordFixed::SIZE;
+        let comment_start =
+            self.eocd.tail_eocd_offset() as usize + EndOfCentralDirectoryRecordFixed::SIZE;
         let remaining = &data[comment_start..];
         let comment_len = self.eocd.comment_len();
         ZipStr::new(&remaining[..(comment_len).min(remaining.len())])
@@ -315,9 +321,9 @@ impl<'data> Iterator for ZipSliceEntries<'data> {
 /// For more complex use cases, use the [`ZipLocator`] to locate an archive.
 #[derive(Debug, Clone)]
 pub struct ZipArchive<R> {
-    pub(crate) reader: R,
-    pub(crate) comment: ZipString,
-    pub(crate) eocd: EndOfCentralDirectory,
+    reader: R,
+    comment: ZipString,
+    eocd: EndOfCentralDirectory,
 }
 
 impl ZipArchive<()> {
@@ -376,6 +382,14 @@ impl ZipArchive<()> {
 }
 
 impl<R> ZipArchive<R> {
+    pub(crate) fn new(reader: R, eocd: EndOfCentralDirectory, comment: ZipString) -> Self {
+        ZipArchive {
+            reader,
+            eocd,
+            comment,
+        }
+    }
+
     /// Returns a reference to the underlying reader.
     pub fn get_ref(&self) -> &R {
         &self.reader
@@ -412,9 +426,9 @@ impl<R> ZipArchive<R> {
             archive: self,
             pos: 0,
             end: 0,
-            offset: self.eocd.offset(),
+            offset: self.eocd.directory_offset(),
             base_offset: self.eocd.base_offset(),
-            central_dir_end_pos: self.eocd.end_position(),
+            central_dir_end_pos: self.eocd.head_eocd_offset(),
         }
     }
 
@@ -462,7 +476,7 @@ impl<R> ZipArchive<R> {
     /// # }
     /// ```
     pub fn eocd_offset(&self) -> u64 {
-        self.eocd.eocd.offset
+        self.eocd.tail_eocd_offset()
     }
 }
 
@@ -766,20 +780,65 @@ impl DataDescriptor {
 
 #[derive(Debug, Clone)]
 pub(crate) struct EndOfCentralDirectory {
-    pub(crate) zip64: Option<Zip64EndOfCentralDirectory>,
-    pub(crate) eocd: EndOfCentralDirectoryRecord,
+    eocd_offset: u64,
+    zip64_eocd_offset: Option<NonZeroU64>,
+    central_dir_size: u64,
+    central_dir_offset: u64,
+    num_entries: u64,
+    comment_len: u16,
 }
 
 impl EndOfCentralDirectory {
+    pub(crate) fn create(eocd: EndOfCentralDirectoryRecord) -> Result<Self, Error> {
+        let result = EndOfCentralDirectory {
+            eocd_offset: eocd.offset,
+            zip64_eocd_offset: None,
+            central_dir_size: u64::from(eocd.central_dir_size),
+            central_dir_offset: u64::from(eocd.central_dir_offset),
+            num_entries: u64::from(eocd.num_entries),
+            comment_len: eocd.comment_len,
+        };
+
+        result.validate()?;
+        Ok(result)
+    }
+
+    pub(crate) fn create_zip64(
+        eocd: EndOfCentralDirectoryRecord,
+        zip64: Zip64EndOfCentralDirectory,
+    ) -> Result<Self, Error> {
+        let result = EndOfCentralDirectory {
+            eocd_offset: eocd.offset,
+            zip64_eocd_offset: NonZeroU64::new(zip64.offset),
+            central_dir_size: zip64.central_dir_size,
+            central_dir_offset: zip64.central_dir_offset,
+            num_entries: zip64.num_entries,
+            comment_len: eocd.comment_len,
+        };
+
+        result.validate()?;
+        Ok(result)
+    }
+
+    fn validate(&self) -> Result<(), Error> {
+        // It doesn't make sense if the start of the central directory is after
+        // the end.
+        if self.directory_offset() > self.head_eocd_offset() {
+            return Err(Error::from(ErrorKind::InvalidEndOfCentralDirectory));
+        }
+
+        Ok(())
+    }
+
     /// the start of the zip file proper.
     #[inline]
     fn base_offset(&self) -> u64 {
-        match &self.zip64 {
+        match self.zip64_eocd_offset {
             Some(_) => 0,
             None => {
-                let size = u64::from(self.eocd.central_dir_size);
-                let offset = u64::from(self.eocd.central_dir_offset);
-                self.eocd.offset.saturating_sub(size).saturating_sub(offset)
+                self.eocd_offset
+                    .saturating_sub(self.central_dir_size)
+                    .saturating_sub(self.central_dir_offset)
 
                 // In the case that the base_offset is calculated to be non-zero
                 // Go's zip reader will check if base_offset of zero would
@@ -795,39 +854,40 @@ impl EndOfCentralDirectory {
         }
     }
 
-    /// end position of the central directory
+    /// The first end of the central directory signature offsets.
     ///
-    /// Returns the position where the central directory ends, which is where
-    /// the EOCD record begins. This uses the actual discovered position from
-    /// the locator rather than trusting the potentially untrusted size field.
+    /// This is offset where no new central directory records are expected.
+    ///
+    /// Will be equivalent to [`Self::tail_eocd_offset`] eocd for non-zip64 files
     #[inline]
-    fn end_position(&self) -> u64 {
-        self.zip64
-            .as_ref()
-            .map(|x| x.offset)
-            .unwrap_or(self.eocd.offset)
+    fn head_eocd_offset(&self) -> u64 {
+        self.zip64_eocd_offset
+            .map(|x| x.get())
+            .unwrap_or(self.eocd_offset)
+    }
+
+    /// The last end of the central directory signature offsets.
+    ///
+    /// This will always be the byte offset of 0x06054b50
+    #[inline]
+    fn tail_eocd_offset(&self) -> u64 {
+        self.eocd_offset
     }
 
     /// offset of the start of the central directory
     #[inline]
-    fn offset(&self) -> u64 {
-        self.zip64
-            .as_ref()
-            .map(|x| x.central_dir_offset)
-            .unwrap_or_else(|| self.base_offset() + u64::from(self.eocd.central_dir_offset))
+    fn directory_offset(&self) -> u64 {
+        self.base_offset() + self.central_dir_offset
     }
 
     #[inline]
     fn entries(&self) -> u64 {
-        self.zip64
-            .as_ref()
-            .map(|z| z.num_entries)
-            .unwrap_or(u64::from(self.eocd.num_entries))
+        self.num_entries
     }
 
     #[inline]
     fn comment_len(&self) -> usize {
-        self.eocd.comment_len as usize
+        self.comment_len as usize
     }
 }
 
@@ -930,6 +990,7 @@ impl VersionMadeBy {
 pub(crate) struct Zip64EndOfCentralDirectory {
     pub offset: u64,
     pub central_dir_offset: u64,
+    pub central_dir_size: u64,
     pub num_entries: u64,
 }
 
@@ -939,6 +1000,7 @@ impl Zip64EndOfCentralDirectory {
         Self {
             offset,
             central_dir_offset: record.central_dir_offset,
+            central_dir_size: record.central_dir_size,
             num_entries: record.num_entries,
         }
     }
@@ -977,7 +1039,6 @@ pub(crate) struct Zip64EndOfCentralDirectoryRecord {
     pub total_entries: u64,
 
     /// size of the central directory
-    #[allow(dead_code)]
     pub central_dir_size: u64,
 
     /// offset of start of central directory with respect to the starting disk number

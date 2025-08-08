@@ -2,7 +2,7 @@ use quickcheck_macros::quickcheck;
 use rawzip::time::{LocalDateTime, UtcDateTime, ZipDateTimeKind};
 use rawzip::{Error, ErrorKind};
 use std::fs::File;
-use std::io::{Cursor, Write};
+use std::io::Cursor;
 use std::path::Path;
 
 mod concatenated_zip_tests;
@@ -810,44 +810,16 @@ fn test_read_what_we_write_slice(data: Vec<u8>) {
 }
 
 #[test]
-fn test_zip_with_prepended_data() {
-    let prefix_data = b"This is some prefix data that comes before the ZIP file\nLine 2\nLine 3\n";
+fn invalid_directory_offset_should_fail_to_parse() {
+    let data = [
+        80, 75, 5, 6, 255, 255, 6, 1, 250, 255, 255, 255, 255, 255, 255, 80, 75, 255, 255, 249,
+        255, 255, 255, 255, 127, 255,
+    ];
+    let result = rawzip::ZipArchive::from_slice(&data);
+    assert!(result.is_err());
 
-    // Create a writer with the prefix data already in it
-    let mut output = Vec::new();
-    output.extend_from_slice(prefix_data);
-
-    // Create ZIP archive starting after the prefix data
-    {
-        let mut archive = rawzip::ZipArchiveWriter::new(&mut output);
-
-        // Add a file to the archive
-        let mut file = archive.new_file("test.txt").create().unwrap();
-        let mut writer = rawzip::ZipDataWriter::new(&mut file);
-        writer.write_all(b"Hello, world!").unwrap();
-        let (_, descriptor) = writer.finish().unwrap();
-        file.finish(descriptor).unwrap();
-
-        archive.finish().unwrap();
-    }
-
-    let archive = rawzip::ZipArchive::from_slice(&output).unwrap();
-    let zip_start_offset = archive.base_offset();
-
-    // Verify we can extract the prefix data using the base offset
-    let extracted_prefix = &output[..zip_start_offset as usize];
-    assert_eq!(extracted_prefix, prefix_data);
-
-    let entries: Vec<_> = archive.entries().collect();
-    assert_eq!(entries.len(), 1);
-
-    // Check first file
-    let entry1 = entries[0].as_ref().unwrap();
-    assert_eq!(
-        entry1.file_path().try_normalize().unwrap().as_ref(),
-        "test.txt"
-    );
-    let wayfinder1 = entry1.wayfinder();
-    let ent1 = archive.get_entry(wayfinder1).unwrap();
-    assert_eq!(ent1.data(), b"Hello, world!");
+    let mut buf = vec![0u8; rawzip::RECOMMENDED_BUFFER_SIZE];
+    let locator = rawzip::ZipLocator::new();
+    let result = locator.locate_in_reader(&data[..], &mut buf, data.len() as u64);
+    assert!(result.is_err());
 }
