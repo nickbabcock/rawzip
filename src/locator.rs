@@ -2,8 +2,8 @@ use crate::errors::{Error, ErrorKind};
 use crate::reader_at::{FileReader, ReaderAtExt};
 use crate::utils::{le_u16, le_u32, le_u64};
 use crate::{
-    EndOfCentralDirectory, ReaderAt, Zip64EndOfCentralDirectoryRecord, ZipArchive, ZipSliceArchive,
-    ZipString, END_OF_CENTRAL_DIR_LOCATOR_SIGNATURE,
+    EndOfCentralDirectory, ReaderAt, Zip64EndOfCentralDirectory, Zip64EndOfCentralDirectoryRecord,
+    ZipArchive, ZipSliceArchive, ZipString, END_OF_CENTRAL_DIR_LOCATOR_SIGNATURE,
 };
 use std::cell::RefCell;
 use std::fs::File;
@@ -77,8 +77,7 @@ impl ZipLocator {
         if !is_zip64 {
             return Ok(EndOfCentralDirectory {
                 zip64: None,
-                eocd,
-                stream_pos: location as u64,
+                eocd: EndOfCentralDirectoryRecord::from_parts(location as u64, eocd),
             });
         }
 
@@ -89,9 +88,11 @@ impl ZipLocator {
         let zip64_record = Zip64EndOfCentralDirectoryRecord::parse(zip64_eocd)?;
 
         Ok(EndOfCentralDirectory {
-            zip64: Some(zip64_record),
-            eocd,
-            stream_pos: zip64_locator.directory_offset,
+            zip64: Some(Zip64EndOfCentralDirectory::from_parts(
+                zip64_locator.directory_offset,
+                zip64_record,
+            )),
+            eocd: EndOfCentralDirectoryRecord::from_parts(location as u64, eocd),
         })
     }
 
@@ -320,8 +321,7 @@ impl ZipLocator {
                 comment,
                 eocd: EndOfCentralDirectory {
                     zip64: None,
-                    eocd,
-                    stream_pos,
+                    eocd: EndOfCentralDirectoryRecord::from_parts(stream_pos, eocd),
                 },
             });
         }
@@ -395,9 +395,11 @@ impl ZipLocator {
             reader: reader.inner,
             comment,
             eocd: EndOfCentralDirectory {
-                zip64: Some(zip64_record),
-                eocd,
-                stream_pos: zip64_locator.directory_offset,
+                zip64: Some(Zip64EndOfCentralDirectory::from_parts(
+                    zip64_locator.directory_offset,
+                    zip64_record,
+                )),
+                eocd: EndOfCentralDirectoryRecord::from_parts(stream_pos, eocd),
             },
         })
     }
@@ -445,11 +447,35 @@ where
     }
 }
 
-#[allow(dead_code)]
+/// A non-zip64 end of central directory
+#[derive(Debug, Clone)]
+pub(crate) struct EndOfCentralDirectoryRecord {
+    pub(crate) offset: u64,
+    pub(crate) central_dir_size: u32,
+    pub(crate) central_dir_offset: u32,
+    pub(crate) num_entries: u16,
+    pub(crate) comment_len: u16,
+}
+
+impl EndOfCentralDirectoryRecord {
+    #[inline]
+    pub fn from_parts(offset: u64, eocd: EndOfCentralDirectoryRecordFixed) -> Self {
+        Self {
+            offset,
+            central_dir_size: eocd.central_dir_size,
+            central_dir_offset: eocd.central_dir_offset,
+            num_entries: eocd.total_entries,
+            comment_len: eocd.comment_len,
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub(crate) struct EndOfCentralDirectoryRecordFixed {
     pub(crate) signature: u32,
+    #[allow(dead_code)]
     pub(crate) disk_number: u16,
+    #[allow(dead_code)]
     pub(crate) eocd_disk: u16,
     pub(crate) num_entries: u16,
     pub(crate) total_entries: u16,
