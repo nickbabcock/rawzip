@@ -72,6 +72,9 @@ pub enum ErrorKind {
     /// An invalid input error with associated message
     InvalidInput { msg: String },
 
+    /// Could not construct an archive with the given end of central directory
+    InvalidEndOfCentralDirectory,
+
     /// An IO error
     IO(std::io::Error),
 
@@ -126,6 +129,9 @@ impl std::fmt::Display for ErrorKind {
             }
             ErrorKind::InvalidInput { ref msg } => {
                 write!(f, "Invalid input: {}", msg)
+            }
+            ErrorKind::InvalidEndOfCentralDirectory => {
+                write!(f, "Invalid end of central directory")
             }
         }
     }
