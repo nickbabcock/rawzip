@@ -1,5 +1,6 @@
 use crate::crc::crc32_chunk;
 use crate::errors::{Error, ErrorKind};
+use crate::extra_fields::{ExtraFieldId, ExtraFields};
 use crate::mode::{
     msdos_mode_to_file_mode, unix_mode_to_file_mode, EntryMode, CREATOR_FAT, CREATOR_MACOS,
     CREATOR_NTFS, CREATOR_UNIX, CREATOR_VFAT,
@@ -1303,26 +1304,13 @@ impl<'a> ZipFileHeaderRecord<'a> {
             return result;
         }
 
-        let mut extra_fields = extra_field;
-
-        loop {
-            let Some(kind) = extra_fields.get(0..2).map(le_u16) else {
-                break;
-            };
-
-            let Some(size) = extra_fields.get(2..4).map(le_u16) else {
-                break;
-            };
-
-            extra_fields = &extra_fields[4..];
-            let end_pos = (size as usize).min(extra_fields.len());
-            let (mut field, rest) = extra_fields.split_at(end_pos);
-            extra_fields = rest;
-
-            const ZIP64_EXTRA_FIELD: u16 = 0x0001;
-            if kind != ZIP64_EXTRA_FIELD {
+        let extra_fields = ExtraFields::new(extra_field);
+        for (field_id, field_data) in extra_fields {
+            if field_id != ExtraFieldId::ZIP64 {
                 continue;
             }
+
+            let mut field = field_data;
 
             result.is_zip64 = true;
 
@@ -1466,7 +1454,7 @@ impl<'a> ZipFileHeaderRecord<'a> {
     /// This method parses the extra field data to locate more accurate timestamps.
     #[inline]
     pub fn last_modified(&self) -> ZipDateTimeKind {
-        extract_best_timestamp(self.extra_field, self.last_mod_time, self.last_mod_date)
+        extract_best_timestamp(self.extra_fields(), self.last_mod_time, self.last_mod_date)
     }
 
     /// Returns the file mode information extracted from the external file attributes.
@@ -1491,6 +1479,47 @@ impl<'a> ZipFileHeaderRecord<'a> {
         }
 
         EntryMode::new(mode)
+    }
+
+    /// Returns an iterator over the extra fields in this file header record.
+    ///
+    /// Extra fields contain additional metadata about files in ZIP archives,
+    /// such as timestamps, alignment information, and platform-specific data.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// # use rawzip::{ZipArchive, extra_fields::ExtraFieldId};
+    /// # fn example(data: &[u8]) -> Result<(), Box<dyn std::error::Error>> {
+    /// let archive = ZipArchive::from_slice(data)?;
+    /// for entry_result in archive.entries() {
+    ///     let entry = entry_result?;
+    ///     let mut extra_fields = entry.extra_fields();
+    ///     for (field_id, field_data) in extra_fields.by_ref() {
+    ///         match field_id {
+    ///             ExtraFieldId::JAVA_JAR => {
+    ///                 println!("Handle jar CAFE field with {} bytes", field_data.len());
+    ///             }
+    ///             _ => {
+    ///                 println!("Found extra field ID: 0x{:04x}", field_id.as_u16());
+    ///             }
+    ///         }
+    ///     }
+    ///     
+    ///     // If desired, check for truncated data
+    ///     if !extra_fields.remaining_bytes().is_empty() {
+    ///         println!("Warning: Some extra field data was truncated");
+    ///     }
+    /// }
+    /// # Ok(())
+    /// # }
+    /// ```
+    ///
+    /// Raw access to the entire extra field data is available when
+    /// `remaining_bytes` is called prior to any iteration.
+    #[inline]
+    pub fn extra_fields(&self) -> ExtraFields<'_> {
+        ExtraFields::new(self.extra_field)
     }
 }
 
