@@ -33,11 +33,13 @@ fn fuzz_reader_zip_archive(data: &[u8]) -> Result<(), rawzip::Error> {
 
         let _name = entry.file_path().try_normalize();
         let _date = entry.last_modified();
+        let _mode = entry.mode();
         let position = entry.wayfinder();
         let Ok(ent) = archive.get_entry(position) else {
             continue;
         };
 
+        let _range = ent.compressed_data_range();
         match entry.compression_method() {
             rawzip::CompressionMethod::Store => {
                 let mut verifier = ent.verifying_reader(ent.reader());
@@ -74,11 +76,13 @@ fn fuzz_slice_zip_archive(data: &[u8]) -> Result<(), rawzip::Error> {
 
         let _name = entry.file_path().try_normalize();
         let _date = entry.last_modified();
+        let _mode = entry.mode();
         let position = entry.wayfinder();
         let Ok(ent) = archive.get_entry(position) else {
             continue;
         };
 
+        let _range = ent.compressed_data_range();
         match entry.compression_method() {
             rawzip::CompressionMethod::Store => {
                 let mut verifier = ent.verifying_reader(ent.data());
