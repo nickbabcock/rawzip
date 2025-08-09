@@ -208,8 +208,19 @@ impl ZipLocator {
     ///     .map_err(|(_, e)| e)?;
     ///
     /// // Maybe there is another zip archive to be found.
-    /// // So use the previous archive's start as the end
-    /// match locator.locate_in_reader(archive.get_ref(), &mut buffer, archive.base_offset()) {
+    /// // To find where the current archive starts, we need the minimum local header
+    /// // offset. Below we are being conservative and iterating through the entire central
+    /// // directory for the start offset, but in reality out of order central directories
+    /// // are an edge case.
+    /// let zip_start = {
+    ///     let mut min_offset = u64::MAX;
+    ///     let mut entries = archive.entries(&mut buffer);
+    ///     while let Ok(Some(entry)) = entries.next_entry() {
+    ///         min_offset = min_offset.min(entry.local_header_offset());
+    ///     }
+    ///     if min_offset == u64::MAX { 0 } else { min_offset }
+    /// };
+    /// match locator.locate_in_reader(archive.get_ref(), &mut buffer, zip_start) {
     ///    Ok(previous_archive) => {
     ///        println!("Found previous ZIP archive!");
     ///    }
