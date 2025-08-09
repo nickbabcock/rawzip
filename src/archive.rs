@@ -80,14 +80,6 @@ impl<T: AsRef<[u8]>> ZipSliceArchive<T> {
         self.eocd.entries()
     }
 
-    /// Returns the offset of the start of the zip file data.
-    ///
-    /// This is typically 0, but can be non-zero if the zip archive
-    /// is embedded within a larger file (e.g., a self-extracting archive).
-    pub fn base_offset(&self) -> u64 {
-        self.eocd.base_offset()
-    }
-
     /// Returns the offset of the End of Central Directory (EOCD) signature.
     ///
     /// See [`ZipSliceArchive::eocd_offset()`] for more details.
@@ -442,14 +434,6 @@ impl<R> ZipArchive<R> {
     /// Returns the comment of the zip archive, if any.
     pub fn comment(&self) -> ZipStr {
         self.comment.as_str()
-    }
-
-    /// Returns the offset of the start of the zip file data.
-    ///
-    /// This is typically 0, but can be non-zero if the zip archive
-    /// is embedded within a larger file (e.g., a self-extracting archive).
-    pub fn base_offset(&self) -> u64 {
-        self.eocd.base_offset()
     }
 
     /// Returns the offset of the End of Central Directory (EOCD) signature.

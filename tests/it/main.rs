@@ -5,7 +5,7 @@ use std::fs::File;
 use std::io::Cursor;
 use std::path::Path;
 
-mod concatenated_zip_tests;
+mod extra_data_zip_tests;
 mod false_signature_tests;
 mod modification_time_tests;
 mod permission_tests;
