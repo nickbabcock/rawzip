@@ -823,3 +823,52 @@ fn invalid_directory_offset_should_fail_to_parse() {
     let result = locator.locate_in_reader(&data[..], &mut buf, data.len() as u64);
     assert!(result.is_err());
 }
+
+#[test]
+fn test_should_not_overflow_on_offsets() {
+    let data = [
+        80, 75, 3, 4, 20, 0, 0, 0, 8, 0, 48, 116, 10, 65, 126, 231, 255, 105, 36, 0, 0, 0, 36, 1,
+        0, 0, 0, 0, 0, 0, 69, 219, 65, 68, 77, 69, 11, 201, 200, 44, 86, 40, 206, 77, 204, 201, 81,
+        72, 203, 204, 73, 34, 0, 60, 242, 76, 243, 20, 48, 162, 204, 3, 20, 210, 242, 139, 114, 19,
+        75, 244, 184, 0, 80, 75, 1, 2, 45, 3, 45, 0, 0, 0, 8, 0, 48, 114, 10, 65, 126, 231, 255,
+        105, 255, 255, 255, 255, 255, 255, 255, 255, 6, 0, 20, 0, 0, 0, 0, 0, 0, 0, 0, 0, 164, 129,
+        0, 0, 0, 0, 82, 69, 65, 68, 77, 69, 1, 0, 16, 0, 36, 16, 0, 0, 0, 80, 75, 5, 255, 255, 255,
+        255, 255, 255, 255, 255, 80, 75, 6, 6, 44, 0, 0, 0, 0, 0, 0, 0, 45, 0, 45, 0, 0, 0, 0, 0,
+        0, 255, 255, 255, 255, 255, 128, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 72, 0, 0, 0, 0, 0,
+        0, 0, 72, 0, 0, 0, 0, 0, 0, 0, 80, 75, 6, 7, 0, 0, 0, 0, 144, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0,
+        0, 80, 75, 5, 6, 0, 0, 0, 64, 255, 255, 0, 0, 8, 0, 53, 116, 10, 65, 126, 231, 0, 0, 0, 0,
+        7, 0, 0, 0, 0, 144, 0, 0, 0, 0, 0, 0, 0, 255, 255, 255, 255, 255, 255, 255, 255, 0, 0,
+    ];
+    let result = rawzip::ZipArchive::from_slice(&data).unwrap();
+    let entries = result.entries();
+    let mut has_error = false;
+
+    for entry in entries {
+        let Ok(entry) = entry else {
+            has_error = true;
+            break;
+        };
+        has_error |= result.get_entry(entry.wayfinder()).is_err();
+    }
+    assert!(has_error);
+
+    let mut buf = vec![0u8; rawzip::RECOMMENDED_BUFFER_SIZE];
+    let locator = rawzip::ZipLocator::new();
+    let result = locator
+        .locate_in_reader(&data[..], &mut buf, data.len() as u64)
+        .unwrap();
+    let mut entries = result.entries(&mut buf);
+    let mut has_error = false;
+
+    loop {
+        let Ok(entry) = entries.next_entry() else {
+            has_error = true;
+            break;
+        };
+        let Some(entry) = entry else {
+            break;
+        };
+        has_error |= result.get_entry(entry.wayfinder()).is_err();
+    }
+    assert!(has_error);
+}

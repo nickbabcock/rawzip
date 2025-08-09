@@ -495,15 +495,21 @@ where
         // variable length. Not everyone uses this as the source of truth:
         // https://labs.redyops.com/index.php/2020/04/30/spending-a-night-reading-the-zip-file-format-specification/
         let file_header = ZipLocalFileHeaderFixed::parse(&buffer)?;
-        let body_offset = entry.local_header_offset
-            + ZipLocalFileHeaderFixed::SIZE as u64
-            + file_header.variable_length() as u64;
+        let (body_offset, o1) = entry
+            .local_header_offset
+            .overflowing_add(ZipLocalFileHeaderFixed::SIZE as u64);
+        let (body_offset, o2) = body_offset.overflowing_add(file_header.variable_length() as u64);
+        let (body_end_offset, o3) = body_offset.overflowing_add(entry.compressed_size);
+
+        if o1 || o2 || o3 {
+            return Err(Error::from(ErrorKind::Eof));
+        }
 
         Ok(ZipEntry {
             archive: self,
             entry,
             body_offset,
-            body_end_offset: entry.compressed_size + body_offset,
+            body_end_offset,
         })
     }
 }
