@@ -1,31 +1,42 @@
 #![no_main]
+use std::cell::Cell;
 use libfuzzer_sys::fuzz_target;
 use rawzip::{Error, ErrorKind};
 
 fuzz_target!(|data: &[u8]| fuzz_zip(data));
 
 fn fuzz_zip(data: &[u8]) {
-    match (fuzz_slice_zip_archive(data), fuzz_reader_zip_archive(data)) {
-        (Ok(()), Ok(())) => {}
-        (Err(e1), Err(e2)) if errors_eq(&e1, e2.kind()) => {}
-        (Err(e1), Err(e2)) => panic!("Inconsistent errors: {:?} vs {:?}", e1, e2),
-        (Ok(()), Err(e)) => {
-            panic!("Slice method succeeded, but reader method failed: {:?}", e);
+    thread_local!(static BUF: Cell<Vec<u8>> = const { Cell::new(Vec::new()) });
+    BUF.with(|cell| {
+        let mut buffer = cell.take();
+        buffer.resize(rawzip::RECOMMENDED_BUFFER_SIZE, 0);
+
+        match (
+            fuzz_slice_zip_archive(data),
+            fuzz_reader_zip_archive(data, &mut buffer),
+        ) {
+            (Ok(()), Ok(())) => {}
+            (Err(e1), Err(e2)) if errors_eq(&e1, e2.kind()) => {}
+            (Err(e1), Err(e2)) => panic!("Inconsistent errors: {:?} vs {:?}", e1, e2),
+            (Ok(()), Err(e)) => {
+                panic!("Slice method succeeded, but reader method failed: {:?}", e);
+            }
+            (Err(e), Ok(())) => {
+                panic!("Reader method succeeded, but slice method failed: {:?}", e);
+            }
         }
-        (Err(e), Ok(())) => {
-            panic!("Reader method succeeded, but slice method failed: {:?}", e);
-        }
-    }
+
+        cell.set(buffer);
+    });
 }
 
-fn fuzz_reader_zip_archive(data: &[u8]) -> Result<(), rawzip::Error> {
-    let mut buf = vec![0u8; rawzip::RECOMMENDED_BUFFER_SIZE];
-    let Ok(archive) = rawzip::ZipArchive::from_seekable(std::io::Cursor::new(data), &mut buf)
-    else {
+fn fuzz_reader_zip_archive(data: &[u8], buf: &mut Vec<u8>) -> Result<(), rawzip::Error> {
+    let locator = rawzip::ZipLocator::new();
+    let Ok(archive) = locator.locate_in_reader(data, buf, data.len() as u64) else {
         return Ok(());
     };
 
-    let mut entries = archive.entries(&mut buf);
+    let mut entries = archive.entries(buf);
     while let Ok(Some(entry)) = entries.next_entry() {
         if entry.is_dir() {
             continue;
@@ -103,7 +114,6 @@ fn fuzz_slice_zip_archive(data: &[u8]) -> Result<(), rawzip::Error> {
 }
 
 fn errors_eq(a: &Error, b: &ErrorKind) -> bool {
-    println!("Comparing errors: {:?} vs {:?}", a, b);
     match (a.kind(), b) {
         (
             ErrorKind::InvalidSignature {
@@ -138,6 +148,7 @@ fn errors_eq(a: &Error, b: &ErrorKind) -> bool {
             ErrorKind::MissingZip64EndOfCentralDirectory,
             ErrorKind::MissingZip64EndOfCentralDirectory,
         ) => true,
+        (ErrorKind::InvalidEndOfCentralDirectory, ErrorKind::InvalidEndOfCentralDirectory) => true,
         (ErrorKind::BufferTooSmall, ErrorKind::BufferTooSmall) => true,
         _ => false,
     }
