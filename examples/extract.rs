@@ -55,6 +55,8 @@ fn extract_zip_archive<P: AsRef<std::path::Path>>(
         )
     })?;
 
+    let mut zip_start_offset = archive.directory_offset();
+
     // Maintain sorted list of compressed data ranges to detect overlaps:
     // https://www.bamsoftware.com/hacks/zipbomb/
     let mut compressed_ranges = Vec::new();
@@ -77,6 +79,14 @@ fn extract_zip_archive<P: AsRef<std::path::Path>>(
         };
 
         let out_path = target_dir.join(file_path.as_ref());
+        let zip_entry = archive.get_entry(entry.wayfinder()).map_err(|e| {
+            ExtractionError::zip_context(
+                e,
+                format!("Failed to get ZIP entry for file: {}", file_path.as_ref()),
+            )
+        })?;
+
+        zip_start_offset = entry.local_header_offset().min(zip_start_offset);
 
         if entry.is_dir() {
             std::fs::create_dir_all(&out_path).map_err(|e| {
@@ -97,12 +107,6 @@ fn extract_zip_archive<P: AsRef<std::path::Path>>(
             })?;
         }
 
-        let zip_entry = archive.get_entry(entry.wayfinder()).map_err(|e| {
-            ExtractionError::zip_context(
-                e,
-                format!("Failed to get ZIP entry for file: {}", file_path.as_ref()),
-            )
-        })?;
         let reader = zip_entry.reader();
 
         // Check for overlapping compressed data ranges
@@ -280,6 +284,10 @@ fn extract_zip_archive<P: AsRef<std::path::Path>>(
                 })?;
             }
         }
+    }
+
+    if zip_start_offset > 0 {
+        println!("ZIP starting offset: {}", zip_start_offset);
     }
 
     Ok(())
