@@ -6,29 +6,23 @@ use std::io::{Cursor, Write};
 fn find_zip_data_start_offset_slice<T: AsRef<[u8]>>(archive: &rawzip::ZipSliceArchive<T>) -> u64 {
     archive
         .entries()
-        .map(|entry| {
-            entry
-                .as_ref()
-                .map(|e| e.local_header_offset())
-                .unwrap_or(u64::MAX)
-        })
+        .map(|x| x.unwrap().local_header_offset())
         .min()
-        .unwrap_or(0)
+        .unwrap_or(archive.directory_offset())
 }
 
 /// Helper function to find the start of ZIP data by finding the minimum local header offset
 fn find_zip_data_start_offset_reader<R: rawzip::ReaderAt>(archive: &rawzip::ZipArchive<R>) -> u64 {
+    let mut min_offset = archive.directory_offset();
+
     let mut buf = vec![0u8; rawzip::RECOMMENDED_BUFFER_SIZE];
     let mut entries = archive.entries(&mut buf);
-    let mut min_offset = u64::MAX;
-    while let Ok(Some(entry)) = entries.next_entry() {
+
+    while let Some(entry) = entries.next_entry().unwrap() {
         min_offset = min_offset.min(entry.local_header_offset());
     }
-    if min_offset == u64::MAX {
-        0
-    } else {
-        min_offset
-    }
+
+    min_offset
 }
 
 /// Test basic concatenated ZIP functionality: two ZIP files with prefix data
@@ -139,6 +133,7 @@ fn test_zip_with_secret_prelude() {
 }
 
 #[rstest]
+#[case(0)]
 #[case(100)]
 #[case(65536)]
 fn test_zip_declared_prelude(#[case] entry_count: usize) {

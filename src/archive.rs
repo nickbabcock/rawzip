@@ -83,9 +83,16 @@ impl<T: AsRef<[u8]>> ZipSliceArchive<T> {
 
     /// Returns the offset of the End of Central Directory (EOCD) signature.
     ///
-    /// See [`ZipSliceArchive::eocd_offset()`] for more details.
+    /// See [`ZipArchive::eocd_offset()`] for more details.
     pub fn eocd_offset(&self) -> u64 {
         self.eocd.tail_eocd_offset()
+    }
+
+    /// The declared offset of the start of the central directory.
+    ///
+    /// See [`ZipArchive::directory_offset()`] for more details.
+    pub fn directory_offset(&self) -> u64 {
+        self.eocd.directory_offset()
     }
 
     /// The comment of the zip file.
@@ -462,6 +469,19 @@ impl<R> ZipArchive<R> {
     /// ```
     pub fn eocd_offset(&self) -> u64 {
         self.eocd.tail_eocd_offset()
+    }
+
+    /// The declared offset of the start of the central directory.
+    ///
+    /// To verify the validity of this offset, start iterating through the
+    /// central directory via `entries()`. Ensure no errors are returned on the
+    /// first entry.
+    ///
+    /// This value is useful when calculating the amount of prelude data exists
+    /// in the data, as it will serve as the upper bound until each file's
+    /// [`ZipFileHeaderRecord::local_header_offset`] can be examined.
+    pub fn directory_offset(&self) -> u64 {
+        self.eocd.directory_offset()
     }
 }
 
@@ -1401,7 +1421,14 @@ impl<'a> ZipFileHeaderRecord<'a> {
         self.compressed_size
     }
 
-    /// The offset to the local file header within the Zip archive.
+    /// The declared offset to the local file header within the Zip archive.
+    ///
+    /// To verify the validity of this offset, call
+    /// [`ZipSliceArchive::get_entry`] or [`ZipArchive::get_entry`].
+    ///
+    /// The minimum of all local header offsets (or `directory_offset()` when a
+    /// zip is empty), will be the length of prelude data in a zip archive (data
+    /// that is unrelated to the zip archive).
     #[inline]
     pub fn local_header_offset(&self) -> u64 {
         self.local_header_offset
