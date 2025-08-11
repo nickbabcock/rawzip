@@ -1,4 +1,5 @@
 use rawzip::{
+    extra_fields::{ExtraFieldId, ExtraFields},
     time::{LocalDateTime, UtcDateTime, ZipDateTimeKind},
     ZipArchive, ZipArchiveWriter, ZipDataWriter,
 };
@@ -339,4 +340,60 @@ fn test_parsed_datetime_functionality() {
     assert_eq!(parsed_local.year(), 1995);
     assert_eq!(parsed_utc.timezone(), rawzip::time::TimeZone::Utc);
     assert_eq!(parsed_local.timezone(), rawzip::time::TimeZone::Local);
+}
+
+/// Test demonstrating when the local header contains richer timestamp data
+#[test]
+fn test_infozip_extended_timestamps() {
+    let file =
+        std::fs::File::open("assets/time-infozip.zip").expect("Failed to open time-infozip.zip");
+    let mut buffer = vec![0u8; rawzip::RECOMMENDED_BUFFER_SIZE];
+    let archive = ZipArchive::from_file(file, &mut buffer).expect("Failed to create ZipArchive");
+
+    let mut entries = archive.entries(&mut buffer);
+    let entry = entries.next_entry().unwrap().unwrap();
+
+    // Get local header extra fields
+    let wayfinder = entry.wayfinder();
+    let zip_entry = archive.get_entry(wayfinder).unwrap();
+    let mut extra_buffer = vec![0u8; 256]; // Buffer for extra fields
+    let local_fields = zip_entry.extra_fields(&mut extra_buffer).unwrap();
+    assert_extend_time_extra_field_difference(entry.extra_fields(), local_fields);
+}
+
+/// Test demonstrating when the local header contains richer timestamp data using ZipSliceArchive
+#[test]
+fn test_infozip_extended_timestamps_slice() {
+    let archive_data =
+        std::fs::read("assets/time-infozip.zip").expect("Failed to read time-infozip.zip");
+    let archive =
+        rawzip::ZipArchive::from_slice(&archive_data).expect("Failed to create ZipSliceArchive");
+
+    let mut entries = archive.entries();
+    let entry = entries.next_entry().unwrap().unwrap();
+
+    // Get local header extra fields
+    let wayfinder = entry.wayfinder();
+    let zip_entry = archive.get_entry(wayfinder).unwrap();
+    let local_fields = zip_entry.extra_fields();
+    assert_extend_time_extra_field_difference(entry.extra_fields(), local_fields);
+}
+
+fn assert_extend_time_extra_field_difference(mut central: ExtraFields, mut local: ExtraFields) {
+    let central_et = central
+        .find(|(id, _)| *id == ExtraFieldId::EXTENDED_TIMESTAMP)
+        .expect("Central directory should have Extended Timestamp field");
+    let local_et = local
+        .find(|(id, _)| *id == ExtraFieldId::EXTENDED_TIMESTAMP)
+        .expect("Local header should have Extended Timestamp field");
+
+    let (_, central_data) = central_et;
+    let (_, local_data) = local_et;
+
+    assert_eq!(
+        central_data.len(),
+        5,
+        "Central directory should have 5 bytes (mod time only)"
+    );
+    assert_eq!(local_data.len(), 9, "Local header should have 9 bytes (mod + access times) and have richer timestamp data than central directory");
 }

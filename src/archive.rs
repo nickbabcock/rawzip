@@ -136,18 +136,17 @@ impl<T: AsRef<[u8]>> ZipSliceArchive<T> {
         let data = self.data.as_ref();
         let header = &data[(entry.local_header_offset as usize).min(data.len())..];
         let file_header = ZipLocalFileHeaderFixed::parse(header)?;
-        let header = &header[ZipLocalFileHeaderFixed::SIZE..];
-
         let variable_length = file_header.variable_length();
-        let rest = header
-            .get(variable_length..)
-            .ok_or(Error::from(ErrorKind::Eof))?;
 
-        let (data, rest) = if rest.len() < entry.compressed_size_hint() as usize {
+        let header_size = (ZipLocalFileHeaderFixed::SIZE + variable_length) as u32;
+        let (total_size, o1) =
+            (u64::from(header_size)).overflowing_add(entry.compressed_size_hint());
+
+        if o1 || (header.len() as u64) < total_size {
             return Err(Error::from(ErrorKind::Eof));
-        } else {
-            rest.split_at(entry.compressed_size_hint() as usize)
-        };
+        }
+
+        let (entire_entry, rest) = header.split_at(total_size as usize);
 
         let expected_crc = if entry.has_data_descriptor {
             DataDescriptor::parse(rest)?.crc
@@ -155,22 +154,14 @@ impl<T: AsRef<[u8]>> ZipSliceArchive<T> {
             entry.crc
         };
 
-        let data_start_offset = entry.local_header_offset
-            + ZipLocalFileHeaderFixed::SIZE as u64
-            + file_header.variable_length() as u64;
-
-        debug_assert!(std::ptr::eq(
-            data.as_ptr(),
-            self.data.as_ref()[data_start_offset as usize..].as_ptr()
-        ));
-
         Ok(ZipSliceEntry {
-            data,
+            data: entire_entry,
             verifier: ZipVerification {
                 crc: expected_crc,
                 uncompressed_size: entry.uncompressed_size_hint(),
             },
-            data_start_offset,
+            local_header_offset: entry.local_header_offset,
+            data_start_offset: header_size,
         })
     }
 }
@@ -180,15 +171,18 @@ impl<T: AsRef<[u8]>> ZipSliceArchive<T> {
 /// It provides access to the raw compressed data of the entry.
 #[derive(Debug, Clone)]
 pub struct ZipSliceEntry<'a> {
+    // From local header offset to end of compressed data
     data: &'a [u8],
     verifier: ZipVerification,
-    data_start_offset: u64,
+    local_header_offset: u64,
+    // self.data[self.data_start_offset] is the start of compressed data
+    data_start_offset: u32,
 }
 
 impl<'a> ZipSliceEntry<'a> {
     /// Returns the raw, compressed data of the entry as a byte slice.
     pub fn data(&self) -> &'a [u8] {
-        self.data
+        &self.data[self.data_start_offset as usize..]
     }
 
     /// Returns a verifier for the CRC and uncompressed size of the entry.
@@ -218,10 +212,23 @@ impl<'a> ZipSliceEntry<'a> {
     ///
     /// See [`ZipEntry::compressed_data_range`] for more details.
     pub fn compressed_data_range(&self) -> (u64, u64) {
-        (
-            self.data_start_offset,
-            self.data_start_offset + self.data.len() as u64,
-        )
+        let compressed_data_start = self.local_header_offset + self.data_start_offset as u64;
+        let compressed_data_end =
+            compressed_data_start + (self.data.len() - self.data_start_offset as usize) as u64;
+        (compressed_data_start, compressed_data_end)
+    }
+
+    /// Returns an iterator over the extra fields from the local file header.
+    ///
+    /// See [`ZipEntry::extra_fields`] for more details.
+    pub fn extra_fields(&self) -> ExtraFields<'_> {
+        let header =
+            ZipLocalFileHeaderFixed::parse(self.data).expect("header has already been parsed");
+        let file_name_len = header.file_name_len as usize;
+        let extra_field_len = header.extra_field_len as usize;
+        let extra_field_start = ZipLocalFileHeaderFixed::SIZE + file_name_len;
+        let extra_field_end = extra_field_start + extra_field_len;
+        ExtraFields::new(&self.data[extra_field_start..extra_field_end])
     }
 }
 
@@ -647,6 +654,84 @@ where
     /// ```
     pub fn compressed_data_range(&self) -> (u64, u64) {
         (self.body_offset, self.body_end_offset)
+    }
+
+    /// Returns an iterator over the extra fields from the local file header.
+    ///
+    /// This method reads the local file header to extract extra field data.
+    ///
+    /// The extra fields from the local header may differ from those in the
+    /// central directory (like storing access and creation times in the local
+    /// header with only modification time in the central directory).
+    ///
+    /// In order to hold the extra fields data, the provided buffer should be
+    /// large enough to hold 16 KiB worth of data. If the buffer is too small
+    /// for the data, an error is returned.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use rawzip::{ZipArchive, extra_fields::ExtraFieldId};
+    /// let file = std::fs::File::open("assets/time-infozip.zip").expect("Failed to open test file");
+    /// let mut buffer = vec![0u8; rawzip::RECOMMENDED_BUFFER_SIZE];
+    /// let archive = ZipArchive::from_file(file, &mut buffer).expect("Failed to create ZipArchive");
+    ///
+    /// let mut entries = archive.entries(&mut buffer);
+    /// let entry = entries.next_entry().unwrap().unwrap();
+    ///
+    /// // Find the Extended Timestamp fields in central directory
+    /// let (_, central_data) = entry
+    ///     .extra_fields()
+    ///     .find(|(id, _)| *id == ExtraFieldId::EXTENDED_TIMESTAMP)
+    ///     .expect("Central directory should have Extended Timestamp field");
+    /// let central_data_len = central_data.len();
+    ///
+    /// // Get local header extra fields
+    /// let wayfinder = entry.wayfinder();
+    /// let zip_entry = archive.get_entry(wayfinder).unwrap();
+    /// let mut local_fields = zip_entry.extra_fields(&mut buffer).unwrap();
+    ///
+    /// let (_, local_data) = local_fields
+    ///     .find(|(id, _)| *id == ExtraFieldId::EXTENDED_TIMESTAMP)
+    ///     .expect("Local header should have Extended Timestamp field");
+    ///
+    /// // Assert that local header has richer timestamp data
+    /// assert_eq!(central_data_len, 5, "Central directory should have 5 bytes (mod time only)");
+    /// assert_eq!(local_data.len(), 9, "Local header should have 9 bytes (mod + access times)");
+    /// assert!(local_data.len() > central_data_len, "Local header should have richer data");
+    /// ```
+    pub fn extra_fields<'a>(&self, buffer: &'a mut [u8]) -> Result<ExtraFields<'a>, Error> {
+        // Allocate buffer for reading the local file header
+        let mut header_buffer = [0u8; ZipLocalFileHeaderFixed::SIZE];
+
+        // Read the local file header
+        self.archive
+            .get_ref()
+            .read_exact_at(&mut header_buffer, self.entry.local_header_offset)?;
+
+        let local_header = ZipLocalFileHeaderFixed::parse(&header_buffer)?;
+
+        let extra_field_len = local_header.extra_field_len as usize;
+        if extra_field_len == 0 {
+            return Ok(ExtraFields::new(&[]));
+        }
+
+        // Check if buffer is large enough
+        if buffer.len() < extra_field_len {
+            return Err(Error::from(ErrorKind::BufferTooSmall));
+        }
+
+        // Calculate offset to extra field data:
+        let extra_field_offset = self.entry.local_header_offset
+            + ZipLocalFileHeaderFixed::SIZE as u64
+            + local_header.file_name_len as u64;
+
+        // Read extra field data into the provided buffer
+        let extra_field_data = &mut buffer[..extra_field_len];
+        self.archive
+            .get_ref()
+            .read_exact_at(extra_field_data, extra_field_offset)?;
+        Ok(ExtraFields::new(extra_field_data))
     }
 }
 

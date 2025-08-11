@@ -9,7 +9,7 @@ fn fuzz_zip(data: &[u8]) {
     thread_local!(static BUF: Cell<Vec<u8>> = const { Cell::new(Vec::new()) });
     BUF.with(|cell| {
         let mut buffer = cell.take();
-        buffer.resize(rawzip::RECOMMENDED_BUFFER_SIZE, 0);
+        buffer.resize(rawzip::RECOMMENDED_BUFFER_SIZE * 2, 0);
 
         match (
             fuzz_slice_zip_archive(data),
@@ -31,18 +31,19 @@ fn fuzz_zip(data: &[u8]) {
 }
 
 fn fuzz_reader_zip_archive(data: &[u8], buf: &mut Vec<u8>) -> Result<(), rawzip::Error> {
+    let (archive_buf, extra_data_buf) = buf.split_at_mut(rawzip::RECOMMENDED_BUFFER_SIZE);
     let locator = rawzip::ZipLocator::new();
-    let Ok(archive) = locator.locate_in_reader(data, buf, data.len() as u64) else {
+    let Ok(archive) = locator.locate_in_reader(data, archive_buf, data.len() as u64) else {
         return Ok(());
     };
 
     let mut comment_reader = archive.comment();
     let expected_len = comment_reader.remaining();
-    let actual = std::io::copy(&mut comment_reader, &mut std::io::sink())
-        .expect("Failed to read comment");
+    let actual =
+        std::io::copy(&mut comment_reader, &mut std::io::sink()).expect("Failed to read comment");
     assert_eq!(actual, expected_len);
 
-    let mut entries = archive.entries(buf);
+    let mut entries = archive.entries(archive_buf);
     while let Ok(Some(entry)) = entries.next_entry() {
         if entry.is_dir() {
             continue;
@@ -56,6 +57,9 @@ fn fuzz_reader_zip_archive(data: &[u8], buf: &mut Vec<u8>) -> Result<(), rawzip:
             continue;
         };
 
+        let _extra_fields = ent
+            .extra_fields(extra_data_buf)
+            .expect("to be able to parse again");
         let _range = ent.compressed_data_range();
         match entry.compression_method() {
             rawzip::CompressionMethod::Store => {
@@ -99,6 +103,7 @@ fn fuzz_slice_zip_archive(data: &[u8]) -> Result<(), rawzip::Error> {
             continue;
         };
 
+        let _extra_fields = ent.extra_fields();
         let _range = ent.compressed_data_range();
         match entry.compression_method() {
             rawzip::CompressionMethod::Store => {
