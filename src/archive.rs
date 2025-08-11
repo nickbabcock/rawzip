@@ -57,7 +57,7 @@ impl<T: AsRef<[u8]>> ZipSliceArchive<T> {
     }
 
     /// Returns an iterator over the entries in the central directory of the archive.
-    pub fn entries(&self) -> ZipSliceEntries {
+    pub fn entries(&self) -> ZipSliceEntries<'_> {
         let data = self.data.as_ref();
         let entry_data =
             &data[(self.eocd.directory_offset() as usize)..self.eocd.head_eocd_offset() as usize];
@@ -96,7 +96,7 @@ impl<T: AsRef<[u8]>> ZipSliceArchive<T> {
     }
 
     /// The comment of the zip file.
-    pub fn comment(&self) -> ZipStr {
+    pub fn comment(&self) -> ZipStr<'_> {
         let data = self.data.as_ref();
         let comment_start =
             self.eocd.tail_eocd_offset() as usize + EndOfCentralDirectoryRecordFixed::SIZE;
@@ -123,7 +123,7 @@ impl<T: AsRef<[u8]>> ZipSliceArchive<T> {
     ///
     /// Returns an `Error` if the entry cannot be found or read, or if the
     /// archive is malformed.
-    pub fn get_entry(&self, entry: ZipArchiveEntryWayfinder) -> Result<ZipSliceEntry, Error> {
+    pub fn get_entry(&self, entry: ZipArchiveEntryWayfinder) -> Result<ZipSliceEntry<'_>, Error> {
         let data = self.data.as_ref();
         let header = &data[(entry.local_header_offset as usize).min(data.len())..];
         let file_header = ZipLocalFileHeaderFixed::parse(header)?;
@@ -937,7 +937,7 @@ where
     /// This method reads from the underlying archive reader into the provided
     /// buffer to parse entry headers.
     #[inline]
-    pub fn next_entry(&mut self) -> Result<Option<ZipFileHeaderRecord>, Error> {
+    pub fn next_entry(&mut self) -> Result<Option<ZipFileHeaderRecord<'_>>, Error> {
         if self.pos + ZipFileHeaderFixed::SIZE >= self.end {
             if self.offset >= self.central_dir_end_pos {
                 return Ok(None);
@@ -1260,7 +1260,7 @@ impl ZipString {
 
     /// Returns a borrowed `ZipStr` view of this `ZipString`.
     #[inline]
-    pub fn as_str(&self) -> ZipStr {
+    pub fn as_str(&self) -> ZipStr<'_> {
         ZipStr::new(self.0.as_slice())
     }
 }
