@@ -57,8 +57,8 @@ fn fuzz_reader_zip_archive(data: &[u8], buf: &mut Vec<u8>) -> Result<(), rawzip:
             continue;
         };
 
-        let _extra_fields = ent
-            .extra_fields(extra_data_buf)
+        let _local_header = ent
+            .local_header(extra_data_buf)
             .expect("to be able to parse again");
         let _range = ent.compressed_data_range();
         match entry.compression_method() {

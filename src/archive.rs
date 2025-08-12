@@ -124,14 +124,11 @@ impl<T: AsRef<[u8]>> ZipSliceArchive<T> {
         }
     }
 
-    /// Retrieves a specific entry from the archive by its [`ZipArchiveEntryWayfinder`].
+    /// Seeks to the given file entry in the zip archive.
     ///
-    /// A wayfinder can be obtained when iterating through the central directory
-    ///
-    /// # Errors
-    ///
-    /// Returns an `Error` if the entry cannot be found or read, or if the
-    /// archive is malformed.
+    /// See [`ZipArchive::get_entry`] for more details. The biggest difference
+    /// between the reader and slice APIs is that the slice APIs will eagerly
+    /// validate that the entire compressed data is present.
     pub fn get_entry(&self, entry: ZipArchiveEntryWayfinder) -> Result<ZipSliceEntry<'_>, Error> {
         let data = self.data.as_ref();
         let header = &data[(entry.local_header_offset as usize).min(data.len())..];
@@ -220,7 +217,7 @@ impl<'a> ZipSliceEntry<'a> {
 
     /// Returns an iterator over the extra fields from the local file header.
     ///
-    /// See [`ZipEntry::extra_fields`] for more details.
+    /// See [`ZipLocalFileHeader`] for more details.
     pub fn extra_fields(&self) -> ExtraFields<'_> {
         let header =
             ZipLocalFileHeaderFixed::parse(self.data).expect("header has already been parsed");
@@ -229,6 +226,18 @@ impl<'a> ZipSliceEntry<'a> {
         let extra_field_start = ZipLocalFileHeaderFixed::SIZE + file_name_len;
         let extra_field_end = extra_field_start + extra_field_len;
         ExtraFields::new(&self.data[extra_field_start..extra_field_end])
+    }
+
+    /// Returns the file path from the local file header.
+    ///
+    /// See [`ZipLocalFileHeader`] for more details.
+    pub fn file_path(&self) -> ZipFilePath<RawPath<'_>> {
+        let header =
+            ZipLocalFileHeaderFixed::parse(self.data).expect("header has already been parsed");
+        let file_name_len = header.file_name_len as usize;
+        let filename_start = ZipLocalFileHeaderFixed::SIZE;
+        let filename_end = filename_start + file_name_len;
+        ZipFilePath::from_bytes(&self.data[filename_start..filename_end])
     }
 }
 
@@ -543,7 +552,7 @@ impl<R> ZipArchive<R>
 where
     R: ReaderAt,
 {
-    /// Retrieves a specific entry from the archive by a wayfinder.
+    /// Seeks to the given file entry in the zip archive.
     pub fn get_entry(&self, entry: ZipArchiveEntryWayfinder) -> Result<ZipEntry<'_, R>, Error> {
         let mut buffer = [0u8; ZipLocalFileHeaderFixed::SIZE];
         self.reader
@@ -656,52 +665,57 @@ where
         (self.body_offset, self.body_end_offset)
     }
 
-    /// Returns an iterator over the extra fields from the local file header.
+    /// Returns the local file header information.
     ///
-    /// This method reads the local file header to extract extra field data.
+    /// This method reads the local file header to which may differ from the
+    /// central directory data. Most ZIP tools use the central directory as
+    /// authoritative, but access to local header data can be useful:
     ///
-    /// The extra fields from the local header may differ from those in the
-    /// central directory (like storing access and creation times in the local
-    /// header with only modification time in the central directory).
+    /// The local header may contain:
+    /// - Additional or different extra fields (richer timestamp data, etc.)
+    /// - Different filename than the central directory (security concern)
     ///
-    /// In order to hold the extra fields data, the provided buffer should be
-    /// large enough to hold 16 KiB worth of data. If the buffer is too small
-    /// for the data, an error is returned.
+    /// The buffer argument must be large enough to hold both the filename and
+    /// extra fields from the local header or a too small error will be
+    /// returned.
     ///
     /// # Examples
     ///
+    /// ```rust
+    /// # use rawzip::{ZipArchive, RECOMMENDED_BUFFER_SIZE, extra_fields::ExtraFieldId};
+    /// # use std::fs::File;
+    /// # fn example() -> Result<(), Box<dyn std::error::Error>> {
+    /// // Test with filename mismatch test fixture
+    /// let file = File::open("assets/filename_mismatch_test.zip")?;
+    /// let mut buf = vec![0u8; RECOMMENDED_BUFFER_SIZE];
+    /// let archive = ZipArchive::from_file(file, &mut buf)?;
+    ///
+    /// let mut entries = archive.entries(&mut buf);
+    /// let entry_header = entries.next_entry()?.unwrap();
+    ///
+    /// // Central directory shows one filename
+    /// assert_eq!(entry_header.file_path().as_ref(), b"malware.exe");
+    /// let wayfinder = entry_header.wayfinder();
+    /// let entry = archive.get_entry(wayfinder)?;
+    ///
+    /// // Read the local header
+    /// let mut local_buffer = vec![0u8; 1024];
+    /// let local_header = entry.local_header(&mut local_buffer)?;
+    ///
+    /// // Local header shows different filename
+    /// assert_eq!(local_header.file_path().as_ref(), b"safe_file.txt");
+    ///
+    /// // Access extra fields from local header
+    /// let mut found_fields = 0;
+    /// for (field_id, _data) in local_header.extra_fields() {
+    ///     found_fields += 1;
+    ///     // Could check for specific extra field types here
+    ///     println!("Found extra field: {:04x}", field_id.as_u16());
+    /// }
+    /// # Ok(())
+    /// # }
     /// ```
-    /// # use rawzip::{ZipArchive, extra_fields::ExtraFieldId};
-    /// let file = std::fs::File::open("assets/time-infozip.zip").expect("Failed to open test file");
-    /// let mut buffer = vec![0u8; rawzip::RECOMMENDED_BUFFER_SIZE];
-    /// let archive = ZipArchive::from_file(file, &mut buffer).expect("Failed to create ZipArchive");
-    ///
-    /// let mut entries = archive.entries(&mut buffer);
-    /// let entry = entries.next_entry().unwrap().unwrap();
-    ///
-    /// // Find the Extended Timestamp fields in central directory
-    /// let (_, central_data) = entry
-    ///     .extra_fields()
-    ///     .find(|(id, _)| *id == ExtraFieldId::EXTENDED_TIMESTAMP)
-    ///     .expect("Central directory should have Extended Timestamp field");
-    /// let central_data_len = central_data.len();
-    ///
-    /// // Get local header extra fields
-    /// let wayfinder = entry.wayfinder();
-    /// let zip_entry = archive.get_entry(wayfinder).unwrap();
-    /// let mut local_fields = zip_entry.extra_fields(&mut buffer).unwrap();
-    ///
-    /// let (_, local_data) = local_fields
-    ///     .find(|(id, _)| *id == ExtraFieldId::EXTENDED_TIMESTAMP)
-    ///     .expect("Local header should have Extended Timestamp field");
-    ///
-    /// // Assert that local header has richer timestamp data
-    /// assert_eq!(central_data_len, 5, "Central directory should have 5 bytes (mod time only)");
-    /// assert_eq!(local_data.len(), 9, "Local header should have 9 bytes (mod + access times)");
-    /// assert!(local_data.len() > central_data_len, "Local header should have richer data");
-    /// ```
-    pub fn extra_fields<'a>(&self, buffer: &'a mut [u8]) -> Result<ExtraFields<'a>, Error> {
-        // Allocate buffer for reading the local file header
+    pub fn local_header<'a>(&self, buffer: &'a mut [u8]) -> Result<ZipLocalFileHeader<'a>, Error> {
         let mut header_buffer = [0u8; ZipLocalFileHeaderFixed::SIZE];
 
         // Read the local file header
@@ -709,29 +723,29 @@ where
             .get_ref()
             .read_exact_at(&mut header_buffer, self.entry.local_header_offset)?;
 
-        let local_header = ZipLocalFileHeaderFixed::parse(&header_buffer)?;
+        let local_header_fixed =
+            ZipLocalFileHeaderFixed::parse(&header_buffer).expect("header has already been parsed");
+        let file_name_len = local_header_fixed.file_name_len as usize;
+        let extra_field_len = local_header_fixed.extra_field_len as usize;
+        let total_variable_len = file_name_len + extra_field_len;
 
-        let extra_field_len = local_header.extra_field_len as usize;
-        if extra_field_len == 0 {
-            return Ok(ExtraFields::new(&[]));
-        }
-
-        // Check if buffer is large enough
-        if buffer.len() < extra_field_len {
+        // Check if buffer is large enough for both filename and extra fields
+        if buffer.len() < total_variable_len {
             return Err(Error::from(ErrorKind::BufferTooSmall));
         }
 
-        // Calculate offset to extra field data:
-        let extra_field_offset = self.entry.local_header_offset
-            + ZipLocalFileHeaderFixed::SIZE as u64
-            + local_header.file_name_len as u64;
-
-        // Read extra field data into the provided buffer
-        let extra_field_data = &mut buffer[..extra_field_len];
+        let variable_data = &mut buffer[..total_variable_len];
+        let variable_data_offset =
+            self.entry.local_header_offset + ZipLocalFileHeaderFixed::SIZE as u64;
         self.archive
             .get_ref()
-            .read_exact_at(extra_field_data, extra_field_offset)?;
-        Ok(ExtraFields::new(extra_field_data))
+            .read_exact_at(variable_data, variable_data_offset)?;
+
+        let (filename_data, extra_field_data) = variable_data.split_at(file_name_len);
+        Ok(ZipLocalFileHeader {
+            file_path: ZipFilePath::from_bytes(filename_data),
+            extra_fields: ExtraFields::new(extra_field_data),
+        })
     }
 }
 
@@ -873,6 +887,39 @@ where
 {
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
         self.range_reader.read(buf)
+    }
+}
+
+/// Local file header information from a ZIP archive entry.
+///
+/// This struct provides access to data stored in the local file header of a ZIP entry,
+/// which may differ from the information in the central directory. The local header
+/// contains the filename and extra fields as they appear at the start of each entry's
+/// data within the ZIP file.
+///
+/// Most ZIP tools use the central directory as authoritative, but access to local
+/// header data is useful for validation, security analysis, and forensic purposes.
+#[derive(Debug)]
+pub struct ZipLocalFileHeader<'a> {
+    file_path: ZipFilePath<RawPath<'a>>,
+    extra_fields: ExtraFields<'a>,
+}
+
+impl<'a> ZipLocalFileHeader<'a> {
+    /// Returns the file path from the local file header.
+    ///
+    /// This may differ from the central directory file path.
+    pub fn file_path(&self) -> ZipFilePath<RawPath<'a>> {
+        self.file_path
+    }
+
+    /// Returns an iterator over the extra fields from the local file header.
+    ///
+    /// Extra fields in the local header may differ from those in the central directory.
+    /// The local header may contain additional or different metadata compared to the
+    /// central directory entry.
+    pub fn extra_fields(&self) -> ExtraFields<'a> {
+        self.extra_fields
     }
 }
 

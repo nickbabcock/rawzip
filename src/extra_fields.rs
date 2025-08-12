@@ -70,7 +70,7 @@ impl From<u16> for ExtraFieldId {
 /// If the iterator encounters malformed or truncated data, it will stop
 /// yielding entries. You can check [`ExtraFields::remaining_bytes()`] after
 /// iteration to detect if any data was left unparsed.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct ExtraFields<'a> {
     data: &'a [u8],
 }
