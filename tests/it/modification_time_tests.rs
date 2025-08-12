@@ -356,9 +356,12 @@ fn test_infozip_extended_timestamps() {
     // Get local header extra fields
     let wayfinder = entry.wayfinder();
     let zip_entry = archive.get_entry(wayfinder).unwrap();
-    let mut extra_buffer = vec![0u8; 256]; // Buffer for extra fields
-    let local_fields = zip_entry.extra_fields(&mut extra_buffer).unwrap();
-    assert_extend_time_extra_field_difference(entry.extra_fields(), local_fields);
+    let mut local_buffer = vec![0u8; 256];
+    let local_header = zip_entry.local_header(&mut local_buffer).unwrap();
+    assert_extend_time_extra_field_difference(
+        entry.extra_fields(),
+        local_header.extra_fields().clone(),
+    );
 }
 
 /// Test demonstrating when the local header contains richer timestamp data using ZipSliceArchive

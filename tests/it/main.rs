@@ -902,3 +902,37 @@ fn test_java_jar_cafe_extra_field() {
         "No remaining bytes expected after consuming fields"
     );
 }
+
+#[test]
+fn test_filename_mismatch_handling() {
+    // Test the filename mismatch test fixture with ZipEntry (file-based)
+    let file = std::fs::File::open("assets/filename_mismatch_test.zip")
+        .expect("Failed to open filename_mismatch_test.zip");
+    let mut buf = vec![0u8; rawzip::RECOMMENDED_BUFFER_SIZE];
+    let archive = ZipArchive::from_file(file, &mut buf).expect("Failed to create ZipArchive");
+
+    let mut entries = archive.entries(&mut buf);
+    let entry_header = entries.next_entry().unwrap().unwrap();
+
+    // Central directory should show "malware.exe"
+    assert_eq!(entry_header.file_path().as_ref(), b"malware.exe",);
+
+    // Get the ZipEntry to access local_file_path
+    let wayfinder = entry_header.wayfinder();
+    let entry = archive.get_entry(wayfinder).unwrap();
+    let mut local_buffer = vec![0u8; 512];
+    let local_header = entry.local_header(&mut local_buffer).unwrap();
+    assert_eq!(local_header.file_path().as_ref(), b"safe_file.txt");
+
+    // Test slice version
+    let data = std::fs::read("assets/filename_mismatch_test.zip").unwrap();
+    let slice_archive = rawzip::ZipArchive::from_slice(data.as_slice()).unwrap();
+    let mut slice_entries = slice_archive.entries();
+    let slice_header = slice_entries.next_entry().unwrap().unwrap();
+    assert_eq!(slice_header.file_path().as_ref(), b"malware.exe",);
+
+    let slice_wayfinder = slice_header.wayfinder();
+    let slice_entry = slice_archive.get_entry(slice_wayfinder).unwrap();
+    let slice_local_filename = slice_entry.file_path();
+    assert_eq!(slice_local_filename.as_ref(), b"safe_file.txt",);
+}
