@@ -1,4 +1,5 @@
 use criterion::{BenchmarkId, Criterion, Throughput};
+use rawzip::time::UtcDateTime;
 use std::io::{Cursor, Write};
 
 fn crc32(c: &mut Criterion) {
@@ -83,5 +84,52 @@ fn entries(c: &mut Criterion) {
     });
 }
 
-criterion::criterion_group!(benches, crc32, eocd, entries);
+fn create_zips(c: &mut Criterion) {
+    // Create a fixed timestamp for Jan 1, 2000
+    let utc_timestamp = UtcDateTime::from_components(2000, 1, 1, 0, 0, 0, 0).unwrap();
+
+    let mut group = c.benchmark_group("extra-fields");
+
+    // Test with fewer files for faster benchmarking
+    group.bench_function("5k", |b| {
+        let mut output = Vec::new();
+        b.iter(|| {
+            output.clear();
+            let mut output = Cursor::new(&mut output);
+            let mut archive = rawzip::ZipArchiveWriter::new(&mut output);
+
+            let mut filename = String::new();
+
+            // Create 5k files, each with a timestamp (uses extra fields)
+            for i in 0..5_000 {
+                filename.clear();
+                filename.push_str("file");
+                let mut j = i;
+                while j > 0 {
+                    let digit = (j % 10) as u8;
+                    filename.push((b'0' + digit) as char);
+                    j /= 10;
+                }
+                filename.push_str(".txt");
+
+                let mut file = archive
+                    .new_file(&filename)
+                    .compression_method(rawzip::CompressionMethod::Store)
+                    .last_modified(utc_timestamp)
+                    .create()
+                    .unwrap();
+                let mut writer = rawzip::ZipDataWriter::new(&mut file);
+                writer.write_all(b"x").unwrap();
+                let (_, descriptor) = writer.finish().unwrap();
+                file.finish(descriptor).unwrap();
+            }
+
+            archive.finish().unwrap();
+        })
+    });
+
+    group.finish();
+}
+
+criterion::criterion_group!(benches, crc32, eocd, entries, create_zips);
 criterion::criterion_main!(benches);

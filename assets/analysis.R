@@ -56,37 +56,49 @@ parse_p <- ggplot(parse_mean_throughput, aes(x = fn_factor, y = mean_throughput_
 print(parse_p)
 ggsave('rawzip-performance-comparison.png', plot = parse_p, width = 8, height = 5, dpi = 150)
 
-# Filter data for write group
-write_df <- df %>% filter(group == "write")
+# Filter data for write group and prepare for hierarchical analysis
+write_df <- df %>% 
+  filter(group == "write") %>%
+  mutate(
+    # Extract feature type (extra_fields or minimal) and implementation
+    feature_type = str_extract(fn, "^[^/]+"),
+    impl_name = str_extract(fn, "(?<=/).*$"),
+    # Create factors for consistent ordering
+    feature_factor = factor(feature_type, levels = c("minimal", "extra_fields")),
+    impl_factor = factor(impl_name, levels = c("rawzip", "zip"))
+  )
 
-# Calculate mean throughput by implementation for write group
-write_mean_throughput <- write_df %>%
-  group_by(fn_factor) %>%
+# Calculate mean throughput by feature type and implementation
+write_detailed_throughput <- write_df %>%
+  group_by(feature_factor, impl_factor) %>%
   summarise(mean_throughput_mbps = mean(throughput_mbps), .groups = 'drop')
 
-# Write performance graph
-write_p <- ggplot(write_mean_throughput, aes(x = fn_factor, y = mean_throughput_mbps, fill = fn_factor)) +
-  geom_col(width = 0.7) +
-  # Color scale
-  scale_fill_manual(values = colors, guide = "none") +
+# Create a combined write performance graph
+write_detailed_p <- ggplot(write_detailed_throughput, aes(x = feature_factor, y = mean_throughput_mbps, fill = impl_factor)) +
+  geom_col(position = "dodge", width = 0.7) +
+  # Color scale with rawzip and zip colors
+  scale_fill_manual(values = c("rawzip" = colors[["rawzip"]], "zip" = colors[["zip"]]), 
+                    name = "Implementation") +
   # Axis formatting
   scale_y_continuous(
     "Throughput (MB/s)", 
     breaks = pretty_breaks(8),
     labels = comma_format()
   ) +
-  scale_x_discrete("Zip Writer Implementation") +
+  scale_x_discrete("Zip Format Type", 
+                   labels = c("minimal" = "Minimal Format", "extra_fields" = "With Extra Fields")) +
   # Theme and labels
   theme_minimal() +
   theme(
     plot.title = element_text(size = 14, face = "bold"),
     plot.subtitle = element_text(size = 12),
-    axis.title.x = element_text(margin = margin(t = 15))
+    axis.title.x = element_text(margin = margin(t = 15)),
+    legend.position = "bottom"
   ) +
   labs(
-    title = "Rust Zip Writer Performance Comparison",
-    subtitle = "Mean zip archive writing throughput (higher is better)",
+    title = "Zip Writer Performance",
+    subtitle = "Mean writing throughput by format type and implementation (higher is better)",
     caption = "Data from rawzip benchmark suite"
   )
-print(write_p)
-ggsave('rawzip-write-performance-comparison.png', plot = write_p, width = 8, height = 5, dpi = 150)
+print(write_detailed_p)
+ggsave('rawzip-write-performance-comparison.png', plot = write_detailed_p, width = 8, height = 5, dpi = 150)

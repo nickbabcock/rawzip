@@ -1,18 +1,17 @@
 use crate::{
     crc,
     errors::ErrorKind,
-    extra_fields::ExtraFieldId,
+    extra_fields::{ExtraFieldId, ExtraFieldsContainer},
     mode::CREATOR_UNIX,
     path::{NormalizedPath, ZipFilePath},
     time::{DosDateTime, UtcDateTime},
-    CompressionMethod, DataDescriptor, Error, ZipFileHeaderFixed, ZipLocalFileHeaderFixed,
+    CompressionMethod, DataDescriptor, Error, Header, ZipFileHeaderFixed, ZipLocalFileHeaderFixed,
     CENTRAL_HEADER_SIGNATURE, END_OF_CENTRAL_DIR_LOCATOR_SIGNATURE, END_OF_CENTRAL_DIR_SIGNATURE64,
     END_OF_CENTRAL_DIR_SIGNAUTRE_BYTES,
 };
 use std::io::{self, Write};
 
 // ZIP64 constants
-const ZIP64_EXTRA_FIELD_ID: u16 = 0x0001;
 const ZIP64_VERSION_NEEDED: u16 = 45; // 4.5
 const ZIP64_EOCD_SIZE: usize = 56;
 
@@ -176,6 +175,7 @@ pub struct ZipFileBuilder<'archive, 'name, W> {
     compression_method: CompressionMethod,
     modification_time: Option<UtcDateTime>,
     unix_permissions: Option<u32>,
+    extra_fields: ExtraFieldsContainer,
 }
 
 impl<'archive, W> ZipFileBuilder<'archive, '_, W>
@@ -216,12 +216,114 @@ where
         self
     }
 
+    /// Adds an extra field to this file entry.
+    ///
+    /// Extra fields contain additional metadata about files in ZIP archives,
+    /// such as timestamps, alignment information, and platform-specific data.
+    ///
+    /// No deduplication is performed - duplicate field IDs will result in
+    /// multiple entries
+    ///
+    /// Will return an error if the total size exceeds 65,535 bytes for the
+    /// specified headers.
+    ///
+    /// Rawzip will automatically add extra fields:
+    ///
+    /// - `EXTENDED_TIMESTAMP` when `last_modified()` is set
+    /// - `ZIP64` when 32-bit thresholds are met
+    ///
+    /// # Examples
+    ///
+    /// Create files with different extra field headers and verify the
+    /// behavior. Only the central directory is checked. To check the local
+    /// extra fields, see
+    /// [`ZipEntry::local_header`](crate::ZipEntry::local_header)
+    ///
+    /// ```rust
+    /// # use std::io::{Cursor, Write};
+    /// # use rawzip::{ZipArchive, ZipArchiveWriter, ZipDataWriter, extra_fields::ExtraFieldId, Header};
+    /// let mut output = Cursor::new(Vec::new());
+    /// let mut archive = ZipArchiveWriter::new(&mut output);
+    ///
+    /// let my_custom_field = ExtraFieldId::new(0x6666);
+    ///
+    /// // File with extra fields only in the local file header
+    /// let mut local_file = archive.new_file("video.mp4")
+    ///     .extra_field(my_custom_field, b"field1", Header::LOCAL)?
+    ///     .create()?;
+    /// let mut writer = ZipDataWriter::new(&mut local_file);
+    /// writer.write_all(b"video data")?;
+    /// let (_, desc) = writer.finish()?;
+    /// local_file.finish(desc)?;
+    ///
+    /// // File with extra fields only in the central directory
+    /// let mut central_file = archive.new_file("document.pdf")
+    ///     .extra_field(my_custom_field, b"field2", Header::CENTRAL)?
+    ///     .create()?;
+    /// let mut writer = ZipDataWriter::new(&mut central_file);
+    /// writer.write_all(b"PDF content")?;
+    /// let (_, desc) = writer.finish()?;
+    /// central_file.finish(desc)?;
+    ///
+    /// // File with extra fields in both headers for maximum compatibility
+    /// assert_eq!(Header::default(), Header::LOCAL | Header::CENTRAL);
+    /// let mut both_file = archive.new_file("important.dat")
+    ///     .extra_field(my_custom_field, b"field3", Header::default())?
+    ///     .create()?;
+    /// let mut writer = ZipDataWriter::new(&mut both_file);
+    /// writer.write_all(b"important data")?;
+    /// let (_, desc) = writer.finish()?;
+    /// both_file.finish(desc)?;
+    ///
+    /// archive.finish()?;
+    ///
+    /// // Verify the behavior when reading back the central directory
+    /// let zip_data = output.into_inner();
+    /// let archive = ZipArchive::from_slice(&zip_data)?;
+    ///
+    /// for entry_result in archive.entries() {
+    ///     let entry = entry_result?;
+    ///     
+    ///     // Find our custom field in the central directory
+    ///     let custom_field_data = entry.extra_fields()
+    ///         .find(|(id, _)| *id == my_custom_field)
+    ///         .map(|(_, data)| data);
+    ///     
+    ///     match entry.file_path().as_ref() {
+    ///         b"video.mp4" => {
+    ///             // local only field should not be in central directory
+    ///             assert_eq!(custom_field_data, None);
+    ///         }
+    ///         b"document.pdf" => {
+    ///             // central only field should be in central directory
+    ///             assert_eq!(custom_field_data, Some(b"field2".as_slice()));
+    ///         }
+    ///         b"important.dat" => {
+    ///             // both location field should be in central directory
+    ///             assert_eq!(custom_field_data, Some(b"field3".as_slice()));
+    ///         }
+    ///         _ => {}
+    ///     }
+    /// }
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub fn extra_field(
+        mut self,
+        id: ExtraFieldId,
+        data: &[u8],
+        location: Header,
+    ) -> Result<Self, Error> {
+        self.extra_fields.add_field(id, data, location)?;
+        Ok(self)
+    }
+
     /// Creates the file entry and returns a writer for the file's content.
     pub fn create(self) -> Result<ZipEntryWriter<'archive, W>, Error> {
         let options = ZipEntryOptions {
             compression_method: self.compression_method,
             modification_time: self.modification_time,
             unix_permissions: self.unix_permissions,
+            extra_fields: self.extra_fields,
         };
         self.archive.new_file_with_options(self.name, options)
     }
@@ -234,6 +336,7 @@ pub struct ZipDirBuilder<'a, W> {
     name: &'a str,
     modification_time: Option<UtcDateTime>,
     unix_permissions: Option<u32>,
+    extra_fields: ExtraFieldsContainer,
 }
 
 impl<W> ZipDirBuilder<'_, W>
@@ -260,12 +363,27 @@ where
         self
     }
 
+    /// Adds an extra field to this directory entry.
+    ///
+    /// See [`ZipFileBuilder::extra_field`] for details and examples.
+    /// The same behavior notes apply: append-only, no deduplication, and automatic fields.
+    pub fn extra_field(
+        mut self,
+        id: ExtraFieldId,
+        data: &[u8],
+        location: Header,
+    ) -> Result<Self, Error> {
+        self.extra_fields.add_field(id, data, location)?;
+        Ok(self)
+    }
+
     /// Creates the directory entry.
     pub fn create(self) -> Result<(), Error> {
         let options = ZipEntryOptions {
             compression_method: CompressionMethod::Store, // Directories always use Store
             modification_time: self.modification_time,
             unix_permissions: self.unix_permissions,
+            extra_fields: self.extra_fields,
         };
         self.archive.new_dir_with_options(self.name, options)
     }
@@ -275,13 +393,13 @@ impl<W> ZipArchiveWriter<W>
 where
     W: Write,
 {
-    /// Writes a local file header and extended timestamp extra field if present.
+    /// Writes a local file header with filtered extra fields.
     fn write_local_header(
         &mut self,
         file_path: &ZipFilePath<NormalizedPath>,
         flags: u16,
         compression_method: CompressionMethod,
-        options: &ZipEntryOptions,
+        options: &mut ZipEntryOptions,
     ) -> Result<(), Error> {
         // Get DOS timestamp from options or use 0 as default
         let (dos_time, dos_date) = options
@@ -290,8 +408,17 @@ where
             .map(|dt| DosDateTime::from(dt).into_parts())
             .unwrap_or((0, 0));
 
-        let extra_field_len =
-            extended_timestamp_extra_field_size(options.modification_time.as_ref());
+        if let Some(datetime) = options.modification_time.as_ref() {
+            let unix_time = datetime.to_unix().max(0) as u32;
+            let mut data = [0u8; 5];
+            data[0] = 1; // Flags: modification time present
+            data[1..].copy_from_slice(&unix_time.to_le_bytes());
+            options.extra_fields.add_field(
+                ExtraFieldId::EXTENDED_TIMESTAMP,
+                &data,
+                Header::CENTRAL,
+            )?;
+        }
 
         let header = ZipLocalFileHeaderFixed {
             signature: ZipLocalFileHeaderFixed::SIGNATURE,
@@ -304,13 +431,14 @@ where
             compressed_size: 0,
             uncompressed_size: 0,
             file_name_len: file_path.len() as u16,
-            extra_field_len,
+            extra_field_len: options.extra_fields.local_size,
         };
 
         header.write(&mut self.writer)?;
         self.writer.write_all(file_path.as_ref().as_bytes())?;
-        write_extended_timestamp_field(&mut self.writer, options.modification_time.as_ref())?;
-
+        options
+            .extra_fields
+            .write_extra_fields(&mut self.writer, Header::LOCAL)?;
         Ok(())
     }
 
@@ -336,13 +464,18 @@ where
             name,
             modification_time: None,
             unix_permissions: None,
+            extra_fields: ExtraFieldsContainer::new(),
         }
     }
 
     /// Adds a new directory to the archive with options (internal method).
     ///
     /// The name of the directory must end with a `/`.
-    fn new_dir_with_options(&mut self, name: &str, options: ZipEntryOptions) -> Result<(), Error> {
+    fn new_dir_with_options(
+        &mut self,
+        name: &str,
+        mut options: ZipEntryOptions,
+    ) -> Result<(), Error> {
         let file_path = ZipFilePath::from_str(name);
         if !file_path.is_dir() {
             return Err(Error::from(ErrorKind::InvalidInput {
@@ -369,7 +502,7 @@ where
         let name_len = name_bytes.len() as u16;
         self.file_names.extend_from_slice(name_bytes);
 
-        self.write_local_header(&file_path, flags, CompressionMethod::Store, &options)?;
+        self.write_local_header(&file_path, flags, CompressionMethod::Store, &mut options)?;
 
         let file_header = FileHeader {
             name_len,
@@ -381,6 +514,7 @@ where
             flags,
             modification_time: options.modification_time,
             unix_permissions: options.unix_permissions,
+            extra_fields: options.extra_fields,
         };
         self.files.push(file_header);
 
@@ -413,6 +547,7 @@ where
             compression_method: CompressionMethod::Store,
             modification_time: None,
             unix_permissions: None,
+            extra_fields: ExtraFieldsContainer::new(),
         }
     }
 
@@ -420,7 +555,7 @@ where
     fn new_file_with_options(
         &mut self,
         name: &str,
-        options: ZipEntryOptions,
+        mut options: ZipEntryOptions,
     ) -> Result<ZipEntryWriter<'_, W>, Error> {
         let file_path = ZipFilePath::from_str(name.trim_end_matches('/'));
 
@@ -443,17 +578,19 @@ where
         let name_len = name_bytes.len() as u16;
         self.file_names.extend_from_slice(name_bytes);
 
-        self.write_local_header(&file_path, flags, options.compression_method, &options)?;
+        self.write_local_header(&file_path, flags, options.compression_method, &mut options)?;
 
-        Ok(ZipEntryWriter::new(
-            self,
+        Ok(ZipEntryWriter {
+            inner: self,
+            compressed_bytes: 0,
             name_len,
             local_header_offset,
-            options.compression_method,
+            compression_method: options.compression_method,
             flags,
-            options.modification_time,
-            options.unix_permissions,
-        ))
+            modification_time: options.modification_time,
+            unix_permissions: options.unix_permissions,
+            extra_fields: options.extra_fields,
+        })
     }
 
     /// Finishes writing the archive and returns the underlying writer.
@@ -505,8 +642,7 @@ where
                 compressed_size: file.compressed_size.min(ZIP64_THRESHOLD_FILE_SIZE) as u32,
                 uncompressed_size: file.uncompressed_size.min(ZIP64_THRESHOLD_FILE_SIZE) as u32,
                 file_name_len: file.name_len,
-                extra_field_len: file.zip64_extra_field_size()
-                    + extended_timestamp_extra_field_size(file.modification_time.as_ref()),
+                extra_field_len: file.extra_fields.central_size,
                 file_comment_len: 0,
                 disk_number_start: 0,
                 internal_file_attrs: 0,
@@ -522,10 +658,9 @@ where
                 .write_all(&self.file_names[name_offset..new_name_offset])?;
             name_offset = new_name_offset;
 
-            // ZIP64 extended information extra field
-            file.write_zip64_extra_field(&mut self.writer)?;
-
-            write_extended_timestamp_field(&mut self.writer, file.modification_time.as_ref())?;
+            // Extra fields
+            file.extra_fields
+                .write_extra_fields(&mut self.writer, Header::CENTRAL)?;
         }
 
         let central_directory_end = self.writer.count();
@@ -589,31 +724,10 @@ pub struct ZipEntryWriter<'a, W> {
     flags: u16,
     modification_time: Option<UtcDateTime>,
     unix_permissions: Option<u32>,
+    extra_fields: ExtraFieldsContainer,
 }
 
 impl<'a, W> ZipEntryWriter<'a, W> {
-    /// Creates a new `TrackingWriter` wrapping the given writer.
-    pub(crate) fn new(
-        inner: &'a mut ZipArchiveWriter<W>,
-        name_len: u16,
-        local_header_offset: u64,
-        compression_method: CompressionMethod,
-        flags: u16,
-        modification_time: Option<UtcDateTime>,
-        unix_permissions: Option<u32>,
-    ) -> Self {
-        ZipEntryWriter {
-            inner,
-            compressed_bytes: 0,
-            name_len,
-            local_header_offset,
-            compression_method,
-            flags,
-            modification_time,
-            unix_permissions,
-        }
-    }
-
     /// Returns the total number of bytes successfully written (bytes out).
     pub fn compressed_bytes(&self) -> u64 {
         self.compressed_bytes
@@ -627,35 +741,27 @@ impl<'a, W> ZipEntryWriter<'a, W> {
         W: Write,
     {
         output.compressed_size = self.compressed_bytes;
+        let mut buffer = [0u8; 24];
+        buffer[0..4].copy_from_slice(&DataDescriptor::SIGNATURE.to_le_bytes());
+        buffer[4..8].copy_from_slice(&output.crc.to_le_bytes());
 
-        // Write data descriptor
-        self.inner
-            .writer
-            .write_all(&DataDescriptor::SIGNATURE.to_le_bytes())?;
-
-        self.inner.writer.write_all(&output.crc.to_le_bytes())?;
-
-        if output.compressed_size >= ZIP64_THRESHOLD_FILE_SIZE
+        let out_data = if output.compressed_size >= ZIP64_THRESHOLD_FILE_SIZE
             || output.uncompressed_size >= ZIP64_THRESHOLD_FILE_SIZE
         {
             // Use 64-bit sizes for ZIP64
-            self.inner
-                .writer
-                .write_all(&output.compressed_size.to_le_bytes())?;
-            self.inner
-                .writer
-                .write_all(&output.uncompressed_size.to_le_bytes())?;
+            buffer[8..16].copy_from_slice(&output.compressed_size.to_le_bytes());
+            buffer[16..24].copy_from_slice(&output.uncompressed_size.to_le_bytes());
+            &buffer[..]
         } else {
             // Use 32-bit sizes for standard ZIP
-            self.inner
-                .writer
-                .write_all(&(output.compressed_size as u32).to_le_bytes())?;
-            self.inner
-                .writer
-                .write_all(&(output.uncompressed_size as u32).to_le_bytes())?;
-        }
+            buffer[8..12].copy_from_slice(&(output.compressed_size as u32).to_le_bytes());
+            buffer[12..16].copy_from_slice(&(output.uncompressed_size as u32).to_le_bytes());
+            &buffer[..16]
+        };
 
-        let file_header = FileHeader {
+        self.inner.writer.write_all(out_data)?;
+
+        let mut file_header = FileHeader {
             name_len: self.name_len,
             compression_method: self.compression_method,
             local_header_offset: self.local_header_offset,
@@ -665,7 +771,9 @@ impl<'a, W> ZipEntryWriter<'a, W> {
             flags: self.flags,
             modification_time: self.modification_time,
             unix_permissions: self.unix_permissions,
+            extra_fields: self.extra_fields,
         };
+        file_header.finalize_extra_fields()?;
         self.inner.files.push(file_header);
 
         Ok(self.compressed_bytes)
@@ -787,6 +895,7 @@ struct FileHeader {
     flags: u16,
     modification_time: Option<UtcDateTime>,
     unix_permissions: Option<u32>,
+    extra_fields: ExtraFieldsContainer,
 }
 
 impl FileHeader {
@@ -796,92 +905,28 @@ impl FileHeader {
             || self.local_header_offset >= ZIP64_THRESHOLD_OFFSET
     }
 
-    /// Writes the ZIP64 extended information extra field for this file header
-    fn write_zip64_extra_field<W>(&self, writer: &mut W) -> Result<(), Error>
-    where
-        W: Write,
-    {
-        if !self.needs_zip64() {
-            return Ok(());
-        }
-
-        // ZIP64 Extended Information Extra Field header
-        writer.write_all(&ZIP64_EXTRA_FIELD_ID.to_le_bytes())?;
-
-        // Calculate size of data portion
-        let mut data_size = 0u16;
-        if self.uncompressed_size >= ZIP64_THRESHOLD_FILE_SIZE {
-            data_size += 8;
-        }
-        if self.compressed_size >= ZIP64_THRESHOLD_FILE_SIZE {
-            data_size += 8;
-        }
-        if self.local_header_offset >= ZIP64_THRESHOLD_OFFSET {
-            data_size += 8;
-        }
-
-        writer.write_all(&data_size.to_le_bytes())?;
-
-        // Write the actual data fields in the order specified by the spec
-        if self.uncompressed_size >= ZIP64_THRESHOLD_FILE_SIZE {
-            writer.write_all(&self.uncompressed_size.to_le_bytes())?;
-        }
-        if self.compressed_size >= ZIP64_THRESHOLD_FILE_SIZE {
-            writer.write_all(&self.compressed_size.to_le_bytes())?;
-        }
-        if self.local_header_offset >= ZIP64_THRESHOLD_OFFSET {
-            writer.write_all(&self.local_header_offset.to_le_bytes())?;
+    fn finalize_extra_fields(&mut self) -> Result<(), Error> {
+        if self.needs_zip64() {
+            let mut sink = [0u8; 24];
+            let mut pos = 0;
+            if self.uncompressed_size >= ZIP64_THRESHOLD_FILE_SIZE {
+                sink[pos..pos + 8].copy_from_slice(&self.uncompressed_size.to_le_bytes());
+                pos += 8;
+            }
+            if self.compressed_size >= ZIP64_THRESHOLD_FILE_SIZE {
+                sink[pos..pos + 8].copy_from_slice(&self.compressed_size.to_le_bytes());
+                pos += 8;
+            }
+            if self.local_header_offset >= ZIP64_THRESHOLD_OFFSET {
+                sink[pos..pos + 8].copy_from_slice(&self.local_header_offset.to_le_bytes());
+                pos += 8;
+            }
+            self.extra_fields
+                .add_field(ExtraFieldId::ZIP64, &sink[..pos], Header::CENTRAL)?;
         }
 
         Ok(())
     }
-
-    /// Calculates the size of the ZIP64 extra field for this file header
-    fn zip64_extra_field_size(&self) -> u16 {
-        if !self.needs_zip64() {
-            return 0;
-        }
-
-        let mut size = 4u16; // Header (ID + size)
-        if self.uncompressed_size >= ZIP64_THRESHOLD_FILE_SIZE {
-            size += 8;
-        }
-        if self.compressed_size >= ZIP64_THRESHOLD_FILE_SIZE {
-            size += 8;
-        }
-        if self.local_header_offset >= ZIP64_THRESHOLD_OFFSET {
-            size += 8;
-        }
-        size
-    }
-}
-
-fn extended_timestamp_extra_field_size(modification_time: Option<&UtcDateTime>) -> u16 {
-    if modification_time.is_some() {
-        9 // 2 bytes ID + 2 bytes size + 1 byte flags + 4 bytes timestamp
-    } else {
-        0
-    }
-}
-
-fn write_extended_timestamp_field<W>(
-    writer: &mut W,
-    datetime: Option<&UtcDateTime>,
-) -> Result<(), Error>
-where
-    W: Write,
-{
-    let Some(datetime) = datetime else {
-        return Ok(());
-    };
-    let unix_time = datetime.to_unix().max(0) as u32; // ZIP format uses u32 for Unix timestamps, clamp negatives to 0
-    let mut buffer = [0u8; 9];
-    buffer[..2].copy_from_slice(&ExtraFieldId::EXTENDED_TIMESTAMP.as_u16().to_le_bytes());
-    buffer[2..4].copy_from_slice(&5u16.to_le_bytes()); // Size: 1 byte flags + 4 bytes timestamp
-    buffer[4..5].copy_from_slice(&1u8.to_le_bytes()); // Flags: modification time present
-    buffer[5..9].copy_from_slice(&unix_time.to_le_bytes()); // Unix timestamp
-    writer.write_all(&buffer)?;
-    Ok(())
 }
 
 /// Writes the ZIP64 End of Central Directory Record
@@ -953,6 +998,7 @@ struct ZipEntryOptions {
     compression_method: CompressionMethod,
     modification_time: Option<UtcDateTime>,
     unix_permissions: Option<u32>,
+    extra_fields: ExtraFieldsContainer,
 }
 
 #[cfg(test)]

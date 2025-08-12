@@ -1,4 +1,5 @@
-use crate::utils::le_u16;
+use crate::{utils::le_u16, Error, ErrorKind, Header};
+use std::io::Write;
 
 /// A numeric identifier for an extra field in a Zip archive.
 ///
@@ -48,14 +49,14 @@ impl ExtraFieldId {
 
     /// Returns the raw `u16` value of the extra field ID.
     #[inline]
+    pub const fn new(id: u16) -> Self {
+        Self(id)
+    }
+
+    /// Returns the raw `u16` value of the extra field ID.
+    #[inline]
     pub const fn as_u16(self) -> u16 {
         self.0
-    }
-}
-
-impl From<u16> for ExtraFieldId {
-    fn from(id: u16) -> Self {
-        Self(id)
     }
 }
 
@@ -87,6 +88,26 @@ impl<'a> ExtraFields<'a> {
     pub fn remaining_bytes(&self) -> &'a [u8] {
         self.data
     }
+
+    #[inline]
+    fn next_data(&mut self) -> Option<&'a [u8]> {
+        let scratch = self.data;
+        if scratch.len() < 4 {
+            return None;
+        }
+
+        let size = le_u16(&scratch[2..4]) as usize;
+        let total_field_len = size + 4;
+        if scratch.len() < total_field_len {
+            return None;
+        }
+
+        let (body, rest) = scratch.split_at(total_field_len);
+
+        // Only advance once we have the entire entry
+        self.data = rest;
+        Some(body)
+    }
 }
 
 impl<'a> Iterator for ExtraFields<'a> {
@@ -94,25 +115,222 @@ impl<'a> Iterator for ExtraFields<'a> {
 
     #[inline]
     fn next(&mut self) -> Option<Self::Item> {
-        let scratch = self.data;
-        if scratch.len() < 4 {
-            return None;
-        }
-
-        let (head, tail) = scratch.split_at(4);
-        let kind = le_u16(&head[0..2]);
-        let size = le_u16(&head[2..4]);
-
-        if tail.len() < size as usize {
-            return None;
-        }
-
-        let (body, rest) = tail.split_at(size as usize);
-
-        // Only advance once we have the entire entry
-        self.data = rest;
-
+        let next_chunk = self.next_data()?;
+        let kind = le_u16(&next_chunk[0..2]);
+        let body = &next_chunk[4..];
         Some((ExtraFieldId(kind), body))
+    }
+}
+
+/// Container for extra fields with a shared data buffer and cached sizes.
+#[derive(Debug, Clone)]
+pub(crate) struct ExtraFieldsContainer {
+    entries: StackVec<Header, 5>,
+    data_buffer: StackVec<u8, 15>,
+    pub(crate) local_size: u16,
+    pub(crate) central_size: u16,
+}
+
+impl ExtraFieldsContainer {
+    pub fn new() -> Self {
+        Self {
+            entries: StackVec::new(Header::new(0)),
+            data_buffer: StackVec::new(0u8),
+            local_size: 0,
+            central_size: 0,
+        }
+    }
+
+    pub fn add_field(
+        &mut self,
+        id: ExtraFieldId,
+        data: &[u8],
+        location: Header,
+    ) -> Result<(), Error> {
+        let size_delta = 4 + data.len();
+        let mut current_size = 0;
+        if location.includes_local() {
+            current_size = self.local_size;
+        }
+        if location.includes_central() {
+            current_size = std::cmp::max(self.central_size, current_size);
+        }
+
+        if size_delta + (current_size as usize) > u16::MAX as usize {
+            return Err(Error::from(ErrorKind::InvalidInput {
+                msg: "extra field data too large".to_string(),
+            }));
+        }
+
+        let mut buffer = [0u8; 4];
+        buffer[0..2].copy_from_slice(&id.as_u16().to_le_bytes());
+        buffer[2..4].copy_from_slice(&(data.len() as u16).to_le_bytes());
+        self.data_buffer.extend_from_slice(&buffer);
+        self.data_buffer.extend_from_slice(data);
+        if location.includes_local() {
+            self.local_size += size_delta as u16;
+        }
+        if location.includes_central() {
+            self.central_size += size_delta as u16;
+        }
+
+        self.entries.push(location);
+        Ok(())
+    }
+
+    fn write_extra_fields_iter(
+        &self,
+        writer: &mut impl Write,
+        filter: Header,
+    ) -> Result<(), Error> {
+        let fields = self.data_buffer.as_slice();
+        let mut extra_fields = ExtraFields::new(fields);
+        let entries = self.entries.as_slice();
+        for entry in entries {
+            let extra_field = extra_fields.next_data().expect("Entry should have data");
+            let write = entry.intersects(filter);
+            if write {
+                writer.write_all(extra_field)?;
+            }
+        }
+        Ok(())
+    }
+
+    #[inline]
+    pub fn write_extra_fields(&self, writer: &mut impl Write, filter: Header) -> Result<(), Error> {
+        if filter == Header::LOCAL && self.local_size == 0 {
+            // No local fields to write
+            Ok(())
+        } else if filter == Header::CENTRAL && self.central_size == 0 {
+            // No central fields to write
+            Ok(())
+        } else if self.local_size == self.central_size
+            || (self.local_size == 0 || self.central_size == 0)
+        {
+            // If there are no mixed fields or everything is one sided, we can
+            // dump everything
+            writer.write_all(self.data_buffer.as_slice())?;
+            Ok(())
+        } else {
+            self.write_extra_fields_iter(writer, filter)
+        }
+    }
+}
+
+/// A stack-first vector that avoids heap allocation for small amounts of data.
+///
+/// A poor man's `smallvec` as we aren't able to store as many elements inline
+/// (by one byte), but it's still an extremely effective no dependency, no
+/// unsafe solution, as benchmarks showed a 33% throughput improvement when
+/// writing out files with timestamps.
+#[derive(Debug, Clone)]
+pub(crate) enum StackVec<T, const N: usize>
+where
+    T: Copy + Clone,
+{
+    /// Inline storage for up to N elements
+    Small { data: [T; N], len: u8 },
+    /// Heap storage for more elements
+    Large(Vec<T>),
+}
+
+impl<T, const N: usize> StackVec<T, N>
+where
+    T: Copy + Clone,
+{
+    pub fn new(default_val: T) -> Self {
+        Self::Small {
+            data: [default_val; N],
+            len: 0,
+        }
+    }
+
+    pub fn push(&mut self, item: T) {
+        match self {
+            Self::Small { data, len } => {
+                if (*len as usize) < N {
+                    // Still fits in small storage
+                    data[*len as usize] = item;
+                    *len += 1;
+                } else {
+                    // Need to promote to large storage
+                    let mut vec = Vec::with_capacity(N + 1);
+                    vec.extend_from_slice(&data[..N]);
+                    vec.push(item);
+                    *self = Self::Large(vec);
+                }
+            }
+            Self::Large(vec) => {
+                vec.push(item);
+            }
+        }
+    }
+
+    pub fn as_slice(&self) -> &[T] {
+        match self {
+            Self::Small { data, len } => &data[..*len as usize],
+            Self::Large(vec) => vec.as_slice(),
+        }
+    }
+}
+
+// Specialized methods for StackVec<u8, N> (byte buffers)
+impl<const N: usize> StackVec<u8, N> {
+    pub fn extend_from_slice(&mut self, slice: &[u8]) {
+        match self {
+            Self::Small { data, len } => {
+                let current_len = *len as usize;
+                let end = current_len + slice.len();
+                if end <= N {
+                    data[current_len..current_len + slice.len()].copy_from_slice(slice);
+                    *len += slice.len() as u8;
+                } else {
+                    // Need to promote to large buffer
+                    let mut vec = Vec::with_capacity(current_len + slice.len());
+                    vec.extend_from_slice(&data[..current_len]);
+                    vec.extend_from_slice(slice);
+                    *self = Self::Large(vec);
+                }
+            }
+            Self::Large(vec) => {
+                vec.extend_from_slice(slice);
+            }
+        }
+    }
+}
+
+#[derive(Debug)]
+pub enum StackVecIter<'a, T, const N: usize>
+where
+    T: Copy + Clone,
+{
+    Small {
+        data: &'a [T; N],
+        len: u8,
+        index: u8,
+    },
+    Large(std::slice::Iter<'a, T>),
+}
+
+impl<'a, T, const N: usize> Iterator for StackVecIter<'a, T, N>
+where
+    T: Copy + Clone,
+{
+    type Item = &'a T;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        match self {
+            Self::Small { data, len, index } => {
+                if *index < *len {
+                    let result = &data[*index as usize];
+                    *index += 1;
+                    Some(result)
+                } else {
+                    None
+                }
+            }
+            Self::Large(iter) => iter.next(),
+        }
     }
 }
 
@@ -144,5 +362,51 @@ mod tests {
         assert_eq!(body, &[0xDE, 0xAD]);
 
         assert_eq!(iter.next(), None);
+    }
+
+    #[test]
+    fn test_stack_vec_u8_inline_operations() {
+        let mut buf = StackVec::<u8, 4>::new(0);
+        assert_eq!(buf.as_slice(), &[]);
+
+        buf.push(1);
+        assert_eq!(buf.as_slice(), &[1]);
+
+        buf.extend_from_slice(&[2, 3]);
+        assert_eq!(buf.as_slice(), &[1, 2, 3]);
+    }
+
+    #[test]
+    fn test_stack_vec_u8_promote_to_heap() {
+        let mut buf = StackVec::<u8, 2>::new(0);
+
+        // Fill inline capacity
+        buf.extend_from_slice(&[1, 2]);
+        assert_eq!(buf.as_slice(), &[1, 2]);
+
+        // Force promotion to heap
+        buf.extend_from_slice(&[3, 4, 5]);
+        assert_eq!(buf.as_slice(), &[1, 2, 3, 4, 5]);
+
+        buf.push(6);
+        assert_eq!(buf.as_slice(), &[1, 2, 3, 4, 5, 6]);
+    }
+
+    #[test]
+    fn test_stack_vec_size_constraints() {
+        // Test that StackVec for bytes is same size as Vec
+        assert!(
+            std::mem::size_of::<StackVec<u8, 15>>() <= 24,
+            "StackVec should not exceed Vec size on 64 bits"
+        );
+    }
+
+    #[test]
+    fn test_stack_vec_clone() {
+        let mut buf = StackVec::<u8, 2>::new(0);
+        buf.extend_from_slice(&[1, 2, 3]); // Force heap promotion
+
+        let cloned = buf.clone();
+        assert_eq!(buf.as_slice(), cloned.as_slice());
     }
 }
