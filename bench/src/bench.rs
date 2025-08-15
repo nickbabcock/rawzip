@@ -33,15 +33,15 @@ fn create_test_zip() -> Vec<u8> {
 
     for i in 0..200_000 {
         let filename = format!("file{:06}.txt", i);
-        let mut file = archive
+        let (mut entry, content_builder) = archive
             .new_file(&filename)
             .compression_method(rawzip::CompressionMethod::Store)
-            .create()
+            .start()
             .unwrap();
-        let mut writer = rawzip::ZipDataWriter::new(&mut file);
+        let mut writer = content_builder.wrap(&mut entry);
         writer.write_all(b"x").unwrap();
         let (_, descriptor) = writer.finish().unwrap();
-        file.finish(descriptor).unwrap();
+        entry.finish(descriptor).unwrap();
     }
 
     archive.finish().unwrap();

@@ -87,11 +87,11 @@ impl Default for ZipArchiveWriterBuilder {
 ///
 /// let mut output = std::io::Cursor::new(Vec::new());
 /// let mut archive = rawzip::ZipArchiveWriter::new(&mut output);
-/// let mut file = archive.new_file("file.txt").create().unwrap();
-/// let mut writer = rawzip::ZipDataWriter::new(&mut file);
+/// let (mut entry, content_builder) = archive.new_file("file.txt").start().unwrap();
+/// let mut writer = content_builder.wrap(&mut entry);
 /// writer.write_all(b"Hello, world!").unwrap();
 /// let (_, output) = writer.finish().unwrap();
-/// file.finish(output).unwrap();
+/// entry.finish(output).unwrap();
 /// archive.finish().unwrap();
 /// ```
 #[derive(Debug)]
@@ -115,6 +115,30 @@ impl<W> ZipArchiveWriter<W> {
     }
 }
 
+/// Options for CRC32 calculation in ZIP files.
+#[derive(Debug, Clone, Copy, Default)]
+pub enum Crc32Option {
+    /// Calculate CRC32 automatically from the data.
+    #[default]
+    Calculate,
+    /// Use a custom CRC32 value and skip calculation.
+    Custom(u32),
+    /// Skip CRC32 calculation entirely (sets CRC32 to 0).
+    Skip,
+}
+
+impl Crc32Option {
+    /// Returns the initial CRC32 value for this option.
+    #[inline]
+    pub fn initial_value(&self) -> u32 {
+        match self {
+            Crc32Option::Calculate => 0,
+            Crc32Option::Custom(value) => *value,
+            Crc32Option::Skip => 0,
+        }
+    }
+}
+
 /// A builder for creating a new file entry in a ZIP archive.
 #[derive(Debug)]
 pub struct ZipFileBuilder<'archive, 'name, W> {
@@ -123,6 +147,7 @@ pub struct ZipFileBuilder<'archive, 'name, W> {
     compression_method: CompressionMethod,
     modification_time: Option<UtcDateTime>,
     unix_permissions: Option<u32>,
+    crc32_option: Crc32Option,
 }
 
 impl<'archive, W> ZipFileBuilder<'archive, '_, W>
@@ -163,14 +188,79 @@ where
         self
     }
 
+    /// Sets the CRC32 calculation option for the file entry.
+    ///
+    /// By default, CRC32 is calculated automatically from the data. Use this
+    /// method to:
+    ///
+    /// - Skip CRC32 calculation entirely (for performance or when verification
+    ///   isn't desired)
+    /// - Provide a pre-calculated CRC32 value
+    #[must_use]
+    #[inline]
+    pub fn crc32(mut self, crc32_option: Crc32Option) -> Self {
+        self.crc32_option = crc32_option;
+        self
+    }
+
     /// Creates the file entry and returns a writer for the file's content.
+    #[deprecated(
+        since = "0.4.0",
+        note = "Use `start()` method instead as it allows for more flexibility (ie: CRC configuration)"
+    )]
     pub fn create(self) -> Result<ZipEntryWriter<'archive, W>, Error> {
+        let (entry_writer, _) = self.start()?;
+        Ok(entry_writer)
+    }
+
+    /// Mark the start of file data
+    ///
+    /// Returns a tuple:
+    ///
+    /// - `entry` handles the ZIP format and writes compressed data to the archive
+    /// - `content_builder` constructs data writers that handle uncompressed data and CRC32 calculation
+    ///
+    /// # Examples
+    ///
+    /// For stored (uncompressed) files:
+    /// ```
+    /// # use std::io::Write;
+    /// # let mut output = std::io::Cursor::new(Vec::new());
+    /// # let mut archive = rawzip::ZipArchiveWriter::new(&mut output);
+    /// let (mut entry, content_builder) = archive.new_file("file.txt").start().unwrap();
+    /// let mut writer = content_builder.wrap(&mut entry);
+    /// writer.write_all(b"Hello").unwrap();
+    /// let (_, output) = writer.finish().unwrap();
+    /// entry.finish(output).unwrap();
+    /// # archive.finish().unwrap();
+    /// ```
+    ///
+    /// For deflate compression:
+    /// ```
+    /// # use std::io::Write;
+    /// # let mut output = std::io::Cursor::new(Vec::new());
+    /// # let mut archive = rawzip::ZipArchiveWriter::new(&mut output);
+    /// let (mut entry, content_builder) = archive.new_file("file.txt").start().unwrap();
+    /// let encoder = flate2::write::DeflateEncoder::new(&mut entry, flate2::Compression::default());
+    /// let mut writer = content_builder.wrap(encoder);
+    /// writer.write_all(b"Hello").unwrap();
+    /// let (encoder, output) = writer.finish().unwrap();
+    /// encoder.finish().unwrap();
+    /// entry.finish(output).unwrap();
+    /// # archive.finish().unwrap();
+    /// ```
+    pub fn start(self) -> Result<(ZipEntryWriter<'archive, W>, ZipDataWriterBuilder), Error> {
+        let crc32_option = self.crc32_option;
         let options = ZipEntryOptions {
             compression_method: self.compression_method,
             modification_time: self.modification_time,
             unix_permissions: self.unix_permissions,
         };
-        self.archive.new_file_with_options(self.name, options)
+        let entry_writer = self.archive.new_file_with_options(self.name, options)?;
+
+        let data_writer_builder = ZipDataWriterBuilder { crc32_option };
+
+        Ok((entry_writer, data_writer_builder))
     }
 }
 
@@ -247,7 +337,7 @@ where
             compression_method: compression_method.as_id(),
             last_mod_time: dos_time,
             last_mod_date: dos_date,
-            crc32: 0,
+            crc32: 0, // must be zero if data descriptor is used (4.4.4)
             compressed_size: 0,
             uncompressed_size: 0,
             file_name_len: file_path.len() as u16,
@@ -337,14 +427,14 @@ where
     /// # use std::io::{Cursor, Write};
     /// # let mut output = Cursor::new(Vec::new());
     /// # let mut archive = rawzip::ZipArchiveWriter::new(&mut output);
-    /// let mut file = archive.new_file("my-file")
+    /// let (mut entry, content_builder) = archive.new_file("my-file")
     ///     .compression_method(rawzip::CompressionMethod::Deflate)
     ///     .unix_permissions(0o644)
-    ///     .create()?;
-    /// let mut writer = rawzip::ZipDataWriter::new(&mut file);
+    ///     .start()?;
+    /// let mut writer = content_builder.wrap(&mut entry);
     /// writer.write_all(b"Hello, world!")?;
     /// let (_, output) = writer.finish()?;
-    /// file.finish(output)?;
+    /// entry.finish(output)?;
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     #[must_use]
@@ -355,6 +445,7 @@ where
             compression_method: CompressionMethod::Store,
             modification_time: None,
             unix_permissions: None,
+            crc32_option: Crc32Option::default(),
         }
     }
 
@@ -540,6 +631,7 @@ where
 /// Data written to this writer is compressed and written to the underlying archive.
 ///
 /// After writing all data, call `finish` to complete the entry.
+#[derive(Debug)]
 pub struct ZipEntryWriter<'a, W> {
     inner: &'a mut ZipArchiveWriter<W>,
     compressed_bytes: u64,
@@ -551,8 +643,22 @@ pub struct ZipEntryWriter<'a, W> {
     unix_permissions: Option<u32>,
 }
 
+/// A builder for creating data writers that handle uncompressed data and CRC32 calculation.
+#[derive(Debug)]
+pub struct ZipDataWriterBuilder {
+    crc32_option: Crc32Option,
+}
+
+impl ZipDataWriterBuilder {
+    /// Wraps an encoder with a data writer configured with this builder's options.
+    pub fn wrap<E>(self, encoder: E) -> ZipDataWriter<E> {
+        ZipDataWriter::with_crc32(encoder, self.crc32_option)
+    }
+}
+
 impl<'a, W> ZipEntryWriter<'a, W> {
     /// Creates a new `TrackingWriter` wrapping the given writer.
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
         inner: &'a mut ZipArchiveWriter<W>,
         name: ZipFilePath<NormalizedPathBuf>,
@@ -659,15 +765,35 @@ pub struct ZipDataWriter<W> {
     inner: W,
     uncompressed_bytes: u64,
     crc: u32,
+    crc32_option: Crc32Option,
 }
 
 impl<W> ZipDataWriter<W> {
     /// Creates a new `ZipDataWriter` that writes to an underlying writer.
+    #[deprecated(
+        since = "0.4.0",
+        note = "Use the tuple-based API: `ZipFileBuilder::start()` returns `(writer, builder)` for clean separation"
+    )]
     pub fn new(inner: W) -> Self {
+        Self::with_crc32_option(inner, Crc32Option::default())
+    }
+
+    /// Creates a new `ZipDataWriter` with the specified CRC32 option.
+    ///
+    /// This is an internal method. Use the tuple-based API via
+    /// `ZipFileBuilder::start()` instead.
+    pub(crate) fn with_crc32(inner: W, crc32_option: Crc32Option) -> Self {
+        Self::with_crc32_option(inner, crc32_option)
+    }
+
+    /// Creates a new `ZipDataWriter` with a specific CRC32 calculation option.
+    fn with_crc32_option(inner: W, crc32_option: Crc32Option) -> Self {
+        let crc = crc32_option.initial_value();
         ZipDataWriter {
             inner,
             uncompressed_bytes: 0,
-            crc: 0,
+            crc,
+            crc32_option,
         }
     }
 
@@ -707,7 +833,12 @@ where
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
         let bytes_written = self.inner.write(buf)?;
         self.uncompressed_bytes += bytes_written as u64;
-        self.crc = crc::crc32_chunk(&buf[..bytes_written], self.crc);
+
+        // Only calculate CRC32 if the option is Calculate
+        if matches!(self.crc32_option, Crc32Option::Calculate) {
+            self.crc = crc::crc32_chunk(&buf[..bytes_written], self.crc);
+        }
+
         Ok(bytes_written)
     }
 
@@ -916,7 +1047,8 @@ struct ZipEntryOptions {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::Cursor;
+    use crate::{ErrorKind, ZipArchive};
+    use std::io::{Cursor, Write};
 
     #[test]
     fn test_name_lifetime_independence() {
@@ -925,16 +1057,192 @@ mod tests {
 
         // Test file builder with temporary name
         {
-            let mut file = {
+            let (mut entry, content_builder) = {
                 let temp_name = format!("temp-{}.txt", 42);
-                archive.new_file(&temp_name).create().unwrap()
+                archive.new_file(&temp_name).start().unwrap()
             };
-            let mut writer = ZipDataWriter::new(&mut file);
+            let mut writer = content_builder.wrap(&mut entry);
             writer.write_all(b"test").unwrap();
             let (_, desc) = writer.finish().unwrap();
-            file.finish(desc).unwrap();
+            entry.finish(desc).unwrap();
         }
 
         archive.finish().unwrap();
+    }
+
+    #[test]
+    fn test_crc32_options() {
+        use std::io::Write;
+
+        let data = b"Hello, world!";
+        let correct_crc = crate::crc32(data);
+        let incorrect_crc = 0x12345678u32;
+
+        // Test with default CRC calculation
+        {
+            let mut output = Cursor::new(Vec::new());
+            let mut archive = ZipArchiveWriter::new(&mut output);
+            let (mut entry, content_builder) = archive.new_file("normal.txt").start().unwrap();
+            let mut writer = content_builder.wrap(&mut entry);
+            writer.write_all(data).unwrap();
+            let (_, descriptor) = writer.finish().unwrap();
+            entry.finish(descriptor).unwrap();
+            archive.finish().unwrap();
+        }
+
+        // Test with correct custom CRC - should succeed
+        {
+            let mut output = Cursor::new(Vec::new());
+            let mut archive = ZipArchiveWriter::new(&mut output);
+            let (mut entry, content_builder) = archive
+                .new_file("correct.txt")
+                .crc32(Crc32Option::Custom(correct_crc))
+                .start()
+                .unwrap();
+            let mut writer = content_builder.wrap(&mut entry);
+            writer.write_all(data).unwrap();
+            let (_, descriptor) = writer.finish().unwrap();
+            entry.finish(descriptor).unwrap();
+            archive.finish().unwrap();
+
+            // Verify the archive can be read
+            let output = output.into_inner();
+            let archive = ZipArchive::from_slice(&output).unwrap();
+            let mut entries = archive.entries();
+            let entry = entries.next_entry().unwrap().unwrap();
+            let wayfinder = entry.wayfinder();
+            let entry = archive.get_entry(wayfinder).unwrap();
+            let mut verifier = entry.verifying_reader(entry.data());
+            let mut actual = Vec::new();
+            std::io::copy(&mut verifier, &mut actual).unwrap();
+            assert_eq!(&actual, data);
+        }
+
+        // Test with incorrect custom CRC - verification should fail
+        {
+            let mut output = Cursor::new(Vec::new());
+            let mut archive = ZipArchiveWriter::new(&mut output);
+            let (mut entry, content_builder) = archive
+                .new_file("incorrect.txt")
+                .crc32(Crc32Option::Custom(incorrect_crc))
+                .start()
+                .unwrap();
+            let mut writer = content_builder.wrap(&mut entry);
+            writer.write_all(data).unwrap();
+            let (_, descriptor) = writer.finish().unwrap();
+            entry.finish(descriptor).unwrap();
+            archive.finish().unwrap();
+
+            // Verify the archive fails verification
+            let output = output.into_inner();
+            let archive = ZipArchive::from_slice(&output).unwrap();
+            let mut entries = archive.entries();
+            let entry = entries.next_entry().unwrap().unwrap();
+            let wayfinder = entry.wayfinder();
+            let entry = archive.get_entry(wayfinder).unwrap();
+            let mut verifier = entry.verifying_reader(entry.data());
+            let mut actual = Vec::new();
+            let result = std::io::copy(&mut verifier, &mut actual);
+
+            // Verification should fail with InvalidChecksum error
+            assert!(result.is_err());
+            let err = result.unwrap_err();
+            assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
+            let source = err.into_inner().unwrap();
+            let zip_error = source.downcast::<crate::Error>().unwrap();
+            match zip_error.kind() {
+                ErrorKind::InvalidChecksum { expected, actual } => {
+                    assert_eq!(*expected, incorrect_crc);
+                    assert_eq!(*actual, correct_crc);
+                }
+                _ => panic!("Expected InvalidChecksum error, got {:?}", zip_error.kind()),
+            }
+        }
+
+        // Test with skipped CRC - should have CRC of 0, and should validate fine
+        {
+            let mut output = Cursor::new(Vec::new());
+            let mut archive = ZipArchiveWriter::new(&mut output);
+            let (mut entry, content_builder) = archive
+                .new_file("skipped.txt")
+                .crc32(Crc32Option::Skip)
+                .start()
+                .unwrap();
+            let mut writer = content_builder.wrap(&mut entry);
+            writer.write_all(data).unwrap();
+            let (_, descriptor) = writer.finish().unwrap();
+            entry.finish(descriptor).unwrap();
+            archive.finish().unwrap();
+
+            // Verify the archive can be read
+            let output = output.into_inner();
+            let archive = ZipArchive::from_slice(&output).unwrap();
+            let mut entries = archive.entries();
+            let entry = entries.next_entry().unwrap().unwrap();
+            let wayfinder = entry.wayfinder();
+            let entry = archive.get_entry(wayfinder).unwrap();
+            let mut verifier = entry.verifying_reader(entry.data());
+            let mut actual = Vec::new();
+            std::io::copy(&mut verifier, &mut actual).unwrap();
+            assert_eq!(&actual, data);
+        }
+    }
+
+    #[test]
+    fn test_tuple_api() {
+        use std::io::Write;
+
+        let data = b"Hello, world!";
+        let custom_crc = 0x12345678u32;
+
+        // Test the new tuple-based API with custom CRC
+        let mut output = Cursor::new(Vec::new());
+        let mut archive = ZipArchiveWriter::new(&mut output);
+        let (mut entry, content_builder) = archive
+            .new_file("test.txt")
+            .crc32(Crc32Option::Custom(custom_crc))
+            .start()
+            .unwrap();
+
+        // Using the new unified API - the CRC option is automatically configured
+        let mut writer = content_builder.wrap(&mut entry);
+        writer.write_all(data).unwrap();
+        let (_, descriptor) = writer.finish().unwrap();
+
+        // Verify the CRC was correctly applied
+        assert_eq!(descriptor.crc, custom_crc);
+
+        entry.finish(descriptor).unwrap();
+        archive.finish().unwrap();
+    }
+
+    #[test]
+    #[allow(deprecated)]
+    fn test_deprecated_create_method() {
+        use std::io::Write;
+
+        let data = b"Hello, deprecated API!";
+
+        // Test that deprecated create() method still works
+        let mut output = Cursor::new(Vec::new());
+        let mut archive = ZipArchiveWriter::new(&mut output);
+        let mut entry = archive.new_file("deprecated.txt").create().unwrap();
+        let mut writer = ZipDataWriter::new(&mut entry);
+        writer.write_all(data).unwrap();
+        let (_, descriptor) = writer.finish().unwrap();
+        entry.finish(descriptor).unwrap();
+        archive.finish().unwrap();
+
+        // Verify the archive can be read
+        let output = output.into_inner();
+        let archive = ZipArchive::from_slice(&output).unwrap();
+        let mut entries = archive.entries();
+        let entry = entries.next_entry().unwrap().unwrap();
+        let wayfinder = entry.wayfinder();
+        let entry = archive.get_entry(wayfinder).unwrap();
+        let mut verifier = entry.verifying_reader(entry.data());
+        let mut actual = Vec::new();
+        std::io::copy(&mut verifier, &mut actual).unwrap();
+        assert_eq!(&actual, data);
     }
 }
