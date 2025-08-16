@@ -3,7 +3,7 @@ use crate::{
     errors::ErrorKind,
     extra_fields::ExtraFieldId,
     mode::CREATOR_UNIX,
-    path::{NormalizedPath, NormalizedPathBuf, ZipFilePath},
+    path::{NormalizedPath, ZipFilePath},
     time::{DosDateTime, UtcDateTime},
     CompressionMethod, DataDescriptor, Error, ZipLocalFileHeaderFixed, CENTRAL_HEADER_SIGNATURE,
     END_OF_CENTRAL_DIR_LOCATOR_SIGNATURE, END_OF_CENTRAL_DIR_SIGNATURE64,
@@ -116,6 +116,7 @@ impl ZipArchiveWriterBuilder {
         ZipArchiveWriter {
             writer: CountWriter::new(writer, self.count),
             files: Vec::with_capacity(self.capacity),
+            file_names: Vec::new(),
         }
     }
 }
@@ -149,6 +150,7 @@ impl ZipArchiveWriterBuilder {
 #[derive(Debug)]
 pub struct ZipArchiveWriter<W> {
     files: Vec<FileHeader>,
+    file_names: Vec<u8>,
     writer: CountWriter<W>,
 }
 
@@ -362,10 +364,15 @@ where
             flags &= !FLAG_UTF8_ENCODING;
         }
 
+        // Store the name bytes in the central buffer
+        let name_bytes = file_path.as_ref().as_bytes();
+        let name_len = name_bytes.len() as u16;
+        self.file_names.extend_from_slice(name_bytes);
+
         self.write_local_header(&file_path, flags, CompressionMethod::Store, &options)?;
 
         let file_header = FileHeader {
-            name: file_path.into_owned(),
+            name_len,
             compression_method: CompressionMethod::Store,
             local_header_offset,
             compressed_size: 0,
@@ -431,11 +438,16 @@ where
             flags &= !FLAG_UTF8_ENCODING;
         }
 
+        // Store the name bytes in the central buffer
+        let name_bytes = file_path.as_ref().as_bytes();
+        let name_len = name_bytes.len() as u16;
+        self.file_names.extend_from_slice(name_bytes);
+
         self.write_local_header(&file_path, flags, options.compression_method, &options)?;
 
         Ok(ZipEntryWriter::new(
             self,
-            file_path.into_owned(),
+            name_len,
             local_header_offset,
             options.compression_method,
             flags,
@@ -459,6 +471,8 @@ where
         let needs_zip64 = total_entries >= ZIP64_THRESHOLD_ENTRIES
             || central_directory_offset >= ZIP64_THRESHOLD_OFFSET
             || self.files.iter().any(|f| f.needs_zip64());
+
+        let mut name_offset = 0;
 
         // Write central directory entries
         for file in &self.files {
@@ -508,8 +522,7 @@ where
             self.writer.write_all(&uncompressed_size.to_le_bytes())?;
 
             // File name length
-            self.writer
-                .write_all(&(file.name.len() as u16).to_le_bytes())?;
+            self.writer.write_all(&file.name_len.to_le_bytes())?;
 
             // Extra field length
             let extra_field_length = file.zip64_extra_field_size()
@@ -531,7 +544,10 @@ where
             self.writer.write_all(&local_header_offset.to_le_bytes())?;
 
             // File name
-            self.writer.write_all(file.name.as_ref().as_bytes())?;
+            let new_name_offset = name_offset + file.name_len as usize;
+            self.writer
+                .write_all(&self.file_names[name_offset..new_name_offset])?;
+            name_offset = new_name_offset;
 
             // ZIP64 extended information extra field
             file.write_zip64_extra_field(&mut self.writer)?;
@@ -594,7 +610,7 @@ where
 pub struct ZipEntryWriter<'a, W> {
     inner: &'a mut ZipArchiveWriter<W>,
     compressed_bytes: u64,
-    name: ZipFilePath<NormalizedPathBuf>,
+    name_len: u16,
     local_header_offset: u64,
     compression_method: CompressionMethod,
     flags: u16,
@@ -606,7 +622,7 @@ impl<'a, W> ZipEntryWriter<'a, W> {
     /// Creates a new `TrackingWriter` wrapping the given writer.
     pub(crate) fn new(
         inner: &'a mut ZipArchiveWriter<W>,
-        name: ZipFilePath<NormalizedPathBuf>,
+        name_len: u16,
         local_header_offset: u64,
         compression_method: CompressionMethod,
         flags: u16,
@@ -616,7 +632,7 @@ impl<'a, W> ZipEntryWriter<'a, W> {
         ZipEntryWriter {
             inner,
             compressed_bytes: 0,
-            name,
+            name_len,
             local_header_offset,
             compression_method,
             flags,
@@ -667,7 +683,7 @@ impl<'a, W> ZipEntryWriter<'a, W> {
         }
 
         let file_header = FileHeader {
-            name: self.name,
+            name_len: self.name_len,
             compression_method: self.compression_method,
             local_header_offset: self.local_header_offset,
             compressed_size: output.compressed_size,
@@ -789,7 +805,7 @@ impl DataDescriptorOutput {
 
 #[derive(Debug)]
 struct FileHeader {
-    name: ZipFilePath<NormalizedPathBuf>,
+    name_len: u16,
     compression_method: CompressionMethod,
     local_header_offset: u64,
     compressed_size: u64,
