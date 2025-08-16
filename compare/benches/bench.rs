@@ -1,17 +1,29 @@
 use criterion::{criterion_group, criterion_main, Criterion};
 use std::io::{Cursor, Write};
 
-fn create_test_zip() -> Vec<u8> {
+fn create_test_zip(entries: usize) -> Vec<u8> {
+    let jan_1_2001 = rawzip::time::UtcDateTime::from_components(2001, 1, 1, 0, 0, 0, 0).unwrap();
     let mut output = Cursor::new(Vec::new());
     let mut archive = rawzip::ZipArchiveWriter::builder()
-        .with_capacity(100_000)
+        .with_capacity(entries)
         .build(&mut output);
 
-    for i in 0..100_000 {
-        let filename = format!("file{:06}.txt", i);
+    let mut filename = String::new();
+    for i in 0..entries {
+        filename.clear();
+        filename.push_str("file");
+        let mut j = i;
+        while j > 0 {
+            let digit = (j % 10) as u8;
+            filename.push((b'0' + digit) as char);
+            j /= 10;
+        }
+        filename.push_str(".txt");
+
         let mut file = archive
             .new_file(&filename)
             .compression_method(rawzip::CompressionMethod::Store)
+            .last_modified(jan_1_2001)
             .create()
             .unwrap();
         let mut writer = rawzip::ZipDataWriter::new(&mut file);
@@ -26,8 +38,10 @@ fn create_test_zip() -> Vec<u8> {
 
 fn parse_benchmarks(c: &mut Criterion) {
     let mut group = c.benchmark_group("parse");
-    let zip_data = create_test_zip();
-    group.throughput(criterion::Throughput::Bytes(zip_data.len() as u64));
+    let zip_data = create_test_zip(100_000);
+    let setup_zip = rawzip::ZipArchive::from_slice(&zip_data).unwrap();
+    let throughput = zip_data.len() as u64 - setup_zip.directory_offset();
+    group.throughput(criterion::Throughput::Bytes(throughput));
 
     group.bench_function("rawzip", |b| {
         #[inline(never)]
@@ -94,5 +108,50 @@ fn parse_benchmarks(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, parse_benchmarks);
+fn write_benchmarks(c: &mut Criterion) {
+    let mut group = c.benchmark_group("write");
+
+    let zip = create_test_zip(5000);
+
+    group.throughput(criterion::Throughput::Bytes(zip.len() as u64));
+    group.bench_function("rawzip", |b| {
+        b.iter(|| create_test_zip(5000));
+    });
+
+    group.bench_function("zip", |b| {
+        b.iter(|| {
+            let mut output = Cursor::new(Vec::new());
+            let mut archive = zip::ZipWriter::new(&mut output);
+
+            let time = zip::DateTime::from_date_and_time(2001, 1, 1, 0, 0, 0).unwrap();
+
+            let options: zip::write::FileOptions<()> = zip::write::FileOptions::default()
+                .compression_method(zip::CompressionMethod::Stored)
+                .last_modified_time(time);
+
+            let mut filename = String::new();
+            for i in 0..5000 {
+                filename.clear();
+                filename.push_str("file");
+                let mut j = i;
+                while j > 0 {
+                    let digit = (j % 10) as u8;
+                    filename.push((b'0' + digit) as char);
+                    j /= 10;
+                }
+                filename.push_str(".txt");
+
+                archive.start_file(&filename, options).unwrap();
+                archive.write_all(b"Hello, World!").unwrap();
+            }
+
+            archive.finish().unwrap();
+            output.into_inner()
+        });
+    });
+
+    group.finish();
+}
+
+criterion_group!(benches, parse_benchmarks, write_benchmarks);
 criterion_main!(benches);
