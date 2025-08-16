@@ -50,5 +50,13 @@ While individual Zip archive entries can be decompressed in a streaming fashion,
 
 ### Async
 
-With streaming out of the picture, an async interface has a lot less to offer. File APIs already provide offset reads without requiring exclusive access, so they can be done concurrently to maximize IO efficiency even though the individual calls are synchronous. And with compression being purely CPU-bound, it's hard to see where async should be introduced. io_uring could bring benefits in reduced system calls, but the sacrifice in simplicity seems like a dubious trade-off.
+There are two forms of async workloads with Zip archives.
 
+- The data is hosted elsewhere and must be downloaded
+- Local file reads can be completed asynchronously with io_uring
+
+For remote data, it's worth reiterating that we want to avoid parsing the Zip file in a streaming fashion. So if the entire archive will be read, the simplest solution would be to completely download the Zip archive into an ephemeral location.
+
+What if there is not enough disk space for the Zip archive or a fraction of the Zip is required? Network attached storage and blob services like S3 support positioned I/O and can be mounted as a local file system. The read operations on this mounted file system will have higher latency and are more amenable to being offloaded to an I/O threadpool.
+
+There is little need for reading local files asynchronously with io_uring. File APIs already provide offset reads without requiring exclusive access, so they can be done concurrently to maximize IO efficiency even though the individual file reads are synchronous. And with compression being purely CPU-bound, it's hard to see where async should be introduced, and thus not worth the extra complexity and dependencies.
