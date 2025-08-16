@@ -117,13 +117,15 @@ What consumers must handle:
 
 ![Chart depicting rawzip performance of parsing through the central directory compared to other Rust zip implementations (view image on github if reading on docs.rs)](assets/rawzip-performance-comparison.png)
 
+![Chart depicting rawzip performance of writing a Zip file (view image on github if reading on docs.rs)](assets/rawzip-write-performance-comparison.png)
+
 If you want to rip through zips as fast as possible, rawzip is for you. Doesn't matter if the zips are 100 GB+ with 200k entries, nothing will be faster.
 
 Reproduce the benchmarks with the following command:
 
 ```bash
 (cd compare && cargo clean && cargo bench)
-find ./compare/target -path "*parse*" -wholename "*/new/raw.csv" -print0 | xargs -0 xsv cat rows > assets/rawzip-benchmark-data.csv
+find ./compare/target -wholename "*/new/raw.csv" -print0 | xargs -0 xsv cat rows > assets/rawzip-benchmark-data.csv
 ```
 
 The data can be analyzed with the R script found in the assets directory. Keep in mind, benchmarks will vary by machine.

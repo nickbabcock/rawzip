@@ -5,8 +5,8 @@ use crate::{
     mode::CREATOR_UNIX,
     path::{NormalizedPath, ZipFilePath},
     time::{DosDateTime, UtcDateTime},
-    CompressionMethod, DataDescriptor, Error, ZipLocalFileHeaderFixed, CENTRAL_HEADER_SIGNATURE,
-    END_OF_CENTRAL_DIR_LOCATOR_SIGNATURE, END_OF_CENTRAL_DIR_SIGNATURE64,
+    CompressionMethod, DataDescriptor, Error, ZipFileHeaderFixed, ZipLocalFileHeaderFixed,
+    CENTRAL_HEADER_SIGNATURE, END_OF_CENTRAL_DIR_LOCATOR_SIGNATURE, END_OF_CENTRAL_DIR_SIGNATURE64,
     END_OF_CENTRAL_DIR_SIGNAUTRE_BYTES,
 };
 use std::io::{self, Write};
@@ -476,10 +476,6 @@ where
 
         // Write central directory entries
         for file in &self.files {
-            // Central file header signature
-            self.writer
-                .write_all(&CENTRAL_HEADER_SIGNATURE.to_le_bytes())?;
-
             // Version made by and version needed to extract
             let version_needed = if file.needs_zip64() {
                 ZIP64_VERSION_NEEDED
@@ -491,57 +487,34 @@ where
             let version_made_by_hi = file.unix_permissions.map(|_| CREATOR_UNIX).unwrap_or(0);
             let version_made_by = (version_made_by_hi << 8) | version_needed;
 
-            self.writer.write_all(&version_made_by.to_le_bytes())?; // Version made by
-            self.writer.write_all(&version_needed.to_le_bytes())?; // Version needed to extract
-
-            // General purpose bit flag
-            self.writer.write_all(&file.flags.to_le_bytes())?;
-
-            // Compression method
-            self.writer
-                .write_all(&file.compression_method.as_id().as_u16().to_le_bytes())?;
-
-            // Last mod file time and date
             let (dos_time, dos_date) = file
                 .modification_time
                 .as_ref()
                 .map(|dt| DosDateTime::from(dt).into_parts())
                 .unwrap_or((0, 0));
-            self.writer.write_all(&dos_time.to_le_bytes())?;
-            self.writer.write_all(&dos_date.to_le_bytes())?;
 
-            // CRC-32
-            self.writer.write_all(&file.crc.to_le_bytes())?;
+            let header = ZipFileHeaderFixed {
+                signature: CENTRAL_HEADER_SIGNATURE,
+                version_made_by,
+                version_needed,
+                flags: file.flags,
+                compression_method: file.compression_method.as_id(),
+                last_mod_time: dos_time,
+                last_mod_date: dos_date,
+                crc32: file.crc,
+                compressed_size: file.compressed_size.min(ZIP64_THRESHOLD_FILE_SIZE) as u32,
+                uncompressed_size: file.uncompressed_size.min(ZIP64_THRESHOLD_FILE_SIZE) as u32,
+                file_name_len: file.name_len,
+                extra_field_len: file.zip64_extra_field_size()
+                    + extended_timestamp_extra_field_size(file.modification_time.as_ref()),
+                file_comment_len: 0,
+                disk_number_start: 0,
+                internal_file_attrs: 0,
+                external_file_attrs: file.unix_permissions.map(|x| x << 16).unwrap_or(0),
+                local_header_offset: file.local_header_offset.min(ZIP64_THRESHOLD_OFFSET) as u32,
+            };
 
-            // Compressed size - use 0xFFFFFFFF if ZIP64
-            let compressed_size = file.compressed_size.min(ZIP64_THRESHOLD_FILE_SIZE) as u32;
-            self.writer.write_all(&compressed_size.to_le_bytes())?;
-
-            // Uncompressed size - use 0xFFFFFFFF if ZIP64
-            let uncompressed_size = file.uncompressed_size.min(ZIP64_THRESHOLD_FILE_SIZE) as u32;
-            self.writer.write_all(&uncompressed_size.to_le_bytes())?;
-
-            // File name length
-            self.writer.write_all(&file.name_len.to_le_bytes())?;
-
-            // Extra field length
-            let extra_field_length = file.zip64_extra_field_size()
-                + extended_timestamp_extra_field_size(file.modification_time.as_ref());
-            self.writer.write_all(&extra_field_length.to_le_bytes())?;
-
-            // File comment length
-            self.writer.write_all(&0u16.to_le_bytes())?;
-
-            // Disk number start, internal file attributes
-            self.writer.write_all(&[0u8; 4])?;
-
-            // External file attributes
-            let external_attrs = file.unix_permissions.map(|x| x << 16).unwrap_or(0);
-            self.writer.write_all(&external_attrs.to_le_bytes())?;
-
-            // Local header offset - use 0xFFFFFFFF if ZIP64
-            let local_header_offset = file.local_header_offset.min(ZIP64_THRESHOLD_OFFSET) as u32;
-            self.writer.write_all(&local_header_offset.to_le_bytes())?;
+            header.write(&mut self.writer)?;
 
             // File name
             let new_name_offset = name_offset + file.name_len as usize;
@@ -902,10 +875,12 @@ where
         return Ok(());
     };
     let unix_time = datetime.to_unix().max(0) as u32; // ZIP format uses u32 for Unix timestamps, clamp negatives to 0
-    writer.write_all(&ExtraFieldId::EXTENDED_TIMESTAMP.as_u16().to_le_bytes())?;
-    writer.write_all(&5u16.to_le_bytes())?; // Size: 1 byte flags + 4 bytes timestamp
-    writer.write_all(&1u8.to_le_bytes())?; // Flags: modification time present
-    writer.write_all(&unix_time.to_le_bytes())?; // Unix timestamp
+    let mut buffer = [0u8; 9];
+    buffer[..2].copy_from_slice(&ExtraFieldId::EXTENDED_TIMESTAMP.as_u16().to_le_bytes());
+    buffer[2..4].copy_from_slice(&5u16.to_le_bytes()); // Size: 1 byte flags + 4 bytes timestamp
+    buffer[4..5].copy_from_slice(&1u8.to_le_bytes()); // Flags: modification time present
+    buffer[5..9].copy_from_slice(&unix_time.to_le_bytes()); // Unix timestamp
+    writer.write_all(&buffer)?;
     Ok(())
 }
 
