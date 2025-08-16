@@ -144,7 +144,10 @@ fn test_zip_with_secret_prelude() {
 fn test_zip_declared_prelude(#[case] entry_count: usize) {
     let mut output = Cursor::new(Vec::new());
     output.write_all(&[0u8; 1000]).unwrap();
-    let mut archive = rawzip::ZipArchiveWriter::at_offset(output.position()).build(output);
+    let mut archive = rawzip::ZipArchiveWriter::builder()
+        .with_offset(output.position())
+        .with_capacity(entry_count)
+        .build(output);
 
     for i in 0..entry_count {
         let filename = format!("file_{:05}.txt", i);

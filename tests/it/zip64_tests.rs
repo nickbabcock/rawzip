@@ -47,7 +47,9 @@ fn verify_expected_entries(data: &[u8], expected_count: u64) {
 #[case(65536, true)]
 fn test_zip64_threshold_entries(#[case] entry_count: usize, #[case] should_be_zip64: bool) {
     let output = Cursor::new(Vec::new());
-    let mut archive = ZipArchiveWriter::new(output);
+    let mut archive = ZipArchiveWriter::builder()
+        .with_capacity(entry_count)
+        .build(output);
 
     for i in 0..entry_count {
         let filename = format!("file_{:05}.txt", i);
