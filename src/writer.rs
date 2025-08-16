@@ -54,34 +54,75 @@ impl<W: Write> Write for CountWriter<W> {
 }
 
 /// Builds a `ZipArchiveWriter`.
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct ZipArchiveWriterBuilder {
     count: u64,
+    capacity: usize,
 }
 
 impl ZipArchiveWriterBuilder {
     /// Creates a new `ZipArchiveWriterBuilder`.
     pub fn new() -> Self {
-        ZipArchiveWriterBuilder { count: 0 }
+        Self::default()
+    }
+
+    /// Sets the anticipated number of files to optimize memory allocation.
+    pub fn with_capacity(mut self, capacity: usize) -> Self {
+        self.capacity = capacity;
+        self
+    }
+
+    /// Sets the starting offset for writing. Useful when there is prelude data
+    /// prior to the zip archive.
+    ///
+    /// When there is prelude data, setting the offset may not technically be
+    /// required, but it is recommended. For standard zip files, many zip
+    /// readers can self correct when the prelude data isn't properly declared.
+    /// However for zip64 archives, setting the correct offset is required.
+    ///
+    /// # Example: Appending ZIP to existing data
+    /// ```rust
+    /// use std::io::{Cursor, Write, Seek, SeekFrom};
+    ///
+    /// // Create a file with some prefix data
+    /// let mut output = Cursor::new(Vec::new());
+    /// output.write_all(b"This is a custom header or prefix data\n").unwrap();
+    /// let zip_start_offset = output.position();
+    ///
+    /// // Create ZIP archive starting after the prefix data
+    /// let mut archive = rawzip::ZipArchiveWriter::builder()
+    ///     .with_offset(zip_start_offset)  // Tell the archive where it starts
+    ///     .build(&mut output);
+    ///
+    /// // Add files normally
+    /// let mut file = archive.new_file("data.txt").create().unwrap();
+    /// let mut writer = rawzip::ZipDataWriter::new(&mut file);
+    /// writer.write_all(b"File content").unwrap();
+    /// let (_, desc) = writer.finish().unwrap();
+    /// file.finish(desc).unwrap();
+    /// archive.finish().unwrap();
+    ///
+    /// // The resulting file contains both prefix data and the ZIP archive
+    /// let final_data = output.into_inner();
+    /// assert!(final_data.starts_with(b"This is a custom header"));
+    /// ```
+    pub fn with_offset(mut self, offset: u64) -> Self {
+        self.count = offset;
+        self
     }
 
     /// Builds a `ZipArchiveWriter` that writes to `writer`.
     pub fn build<W>(&self, writer: W) -> ZipArchiveWriter<W> {
         ZipArchiveWriter {
             writer: CountWriter::new(writer, self.count),
-            files: Vec::new(),
+            files: Vec::with_capacity(self.capacity),
         }
-    }
-}
-
-impl Default for ZipArchiveWriterBuilder {
-    fn default() -> Self {
-        Self::new()
     }
 }
 
 /// Create a new Zip archive.
 ///
+/// Basic usage:
 /// ```rust
 /// use std::io::Write;
 ///
@@ -94,6 +135,17 @@ impl Default for ZipArchiveWriterBuilder {
 /// file.finish(output).unwrap();
 /// archive.finish().unwrap();
 /// ```
+///
+/// Use the builder for customization:
+/// ```rust
+/// use std::io::Write;
+///
+/// let mut output = std::io::Cursor::new(Vec::<u8>::new());
+/// let mut _archive = rawzip::ZipArchiveWriter::builder()
+///     .with_capacity(1000)  // Optimize for 1000 anticipated files
+///     .build(&mut output);
+/// // ... add files as usual
+/// ```
 #[derive(Debug)]
 pub struct ZipArchiveWriter<W> {
     files: Vec<FileHeader>,
@@ -101,10 +153,9 @@ pub struct ZipArchiveWriter<W> {
 }
 
 impl ZipArchiveWriter<()> {
-    /// Creates a `ZipArchiveWriterBuilder` that starts writing at `offset`.
-    /// This is useful when the ZIP archive is appended to an existing file.
-    pub fn at_offset(offset: u64) -> ZipArchiveWriterBuilder {
-        ZipArchiveWriterBuilder { count: offset }
+    /// Creates a `ZipArchiveWriterBuilder` for configuring the writer.
+    pub fn builder() -> ZipArchiveWriterBuilder {
+        ZipArchiveWriterBuilder::new()
     }
 }
 
@@ -934,6 +985,27 @@ mod tests {
             let (_, desc) = writer.finish().unwrap();
             file.finish(desc).unwrap();
         }
+
+        archive.finish().unwrap();
+    }
+
+    #[test]
+    fn test_builder_with_offset_and_capacity() {
+        let mut output = Cursor::new(Vec::new());
+
+        output.write_all(b"PREFIX DATA").unwrap();
+        let offset = output.position();
+
+        let mut archive = ZipArchiveWriterBuilder::new()
+            .with_capacity(5)
+            .with_offset(offset)
+            .build(&mut output);
+
+        let mut file = archive.new_file("test.txt").create().unwrap();
+        let mut writer = ZipDataWriter::new(&mut file);
+        writer.write_all(b"Hello World").unwrap();
+        let (_, desc) = writer.finish().unwrap();
+        file.finish(desc).unwrap();
 
         archive.finish().unwrap();
     }

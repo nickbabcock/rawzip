@@ -29,7 +29,9 @@ fn eocd(c: &mut Criterion) {
 
 fn create_test_zip() -> Vec<u8> {
     let mut output = Cursor::new(Vec::new());
-    let mut archive = rawzip::ZipArchiveWriter::new(&mut output);
+    let mut archive = rawzip::ZipArchiveWriter::builder()
+        .with_capacity(200_000)
+        .build(&mut output);
 
     for i in 0..200_000 {
         let filename = format!("file{:06}.txt", i);
