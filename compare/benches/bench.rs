@@ -177,6 +177,30 @@ fn write_benchmarks(c: &mut Criterion) {
         });
     });
 
+    group.bench_function("minimal/async_zip", |b| {
+        b.to_async(tokio::runtime::Runtime::new().unwrap())
+            .iter(|| async {
+                use async_zip::base::write::ZipFileWriter;
+                use async_zip::ZipEntryBuilder;
+
+                let mut output = Cursor::new(Vec::new());
+                let mut archive = ZipFileWriter::with_tokio(&mut output);
+
+                let mut names = NameIter::new();
+
+                for i in 0..5000 {
+                    let entry = ZipEntryBuilder::new(
+                        names.name_of(i).into(),
+                        async_zip::Compression::Stored,
+                    );
+                    archive.write_entry_whole(entry, b"x").await.unwrap();
+                }
+
+                archive.close().await.unwrap();
+                output.into_inner()
+            });
+    });
+
     group.finish();
 }
 
