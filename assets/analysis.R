@@ -65,7 +65,7 @@ write_df <- df %>%
     impl_name = str_extract(fn, "(?<=/).*$"),
     # Create factors for consistent ordering
     feature_factor = factor(feature_type, levels = c("minimal", "extra_fields")),
-    impl_factor = factor(impl_name, levels = c("rawzip", "zip"))
+    impl_factor = factor(impl_name, levels = c("rawzip", "zip", "async_zip"))
   )
 
 # Calculate mean throughput by feature type and implementation
@@ -77,7 +77,7 @@ write_detailed_throughput <- write_df %>%
 write_detailed_p <- ggplot(write_detailed_throughput, aes(x = feature_factor, y = mean_throughput_mbps, fill = impl_factor)) +
   geom_col(position = "dodge", width = 0.7) +
   # Color scale with rawzip and zip colors
-  scale_fill_manual(values = c("rawzip" = colors[["rawzip"]], "zip" = colors[["zip"]]), 
+  scale_fill_manual(values = c("rawzip" = colors[["rawzip"]], "zip" = colors[["zip"]], "async_zip" = colors[["async_zip"]]), 
                     name = "Implementation") +
   # Axis formatting
   scale_y_continuous(
