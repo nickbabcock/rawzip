@@ -165,6 +165,58 @@ impl<W> ZipArchiveWriter<W> {
     pub fn new(writer: W) -> Self {
         ZipArchiveWriterBuilder::new().build(writer)
     }
+
+    /// Returns the current offset in the output stream.
+    ///
+    /// Analagous to [`std::io::Cursor::position`].
+    ///
+    /// This can be used to determine various offsets during ZIP archive
+    /// creation:
+    ///
+    /// - Local header offset
+    /// - Start of compressed data offset
+    /// - End of compressed data offset
+    /// - End of data descriptor offset / next file's local header offset
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use std::io::Write;
+    ///
+    /// let mut output = std::io::Cursor::new(Vec::new());
+    /// let mut archive = rawzip::ZipArchiveWriter::new(&mut output);
+    ///
+    /// // 1. Get local header offset
+    /// let local_header_offset = archive.stream_offset();
+    /// let mut file = archive.new_file("test.txt").create().unwrap();
+    ///
+    /// // 2. Get start of data offset
+    /// let data_start_offset = file.stream_offset();
+    ///
+    /// // Write some data
+    /// let mut writer = rawzip::ZipDataWriter::new(&mut file);
+    /// writer.write_all(b"Hello World").unwrap();
+    /// let (_, desc) = writer.finish().unwrap();
+    ///
+    /// // 3. Get end of compressed data offset
+    /// let end_data_offset = file.stream_offset();
+    ///
+    /// let compressed_bytes = file.finish(desc).unwrap();
+    ///
+    /// // 4. Get end of data descriptor offset (next file's local header offset)
+    /// let end_descriptor_offset = archive.stream_offset();
+    ///
+    /// archive.finish().unwrap();
+    ///
+    /// assert_eq!(local_header_offset, 0);
+    /// assert!(data_start_offset > local_header_offset);
+    /// assert_eq!(end_data_offset, data_start_offset + b"Hello World".len() as u64);
+    /// assert_eq!(end_descriptor_offset, end_data_offset + 16); // 16 bytes for data descriptor
+    /// assert_eq!(compressed_bytes, end_data_offset - data_start_offset);
+    /// ```
+    pub fn stream_offset(&self) -> u64 {
+        self.writer.count()
+    }
 }
 
 /// A builder for creating a new file entry in a ZIP archive.
@@ -733,6 +785,13 @@ impl<'a, W> ZipEntryWriter<'a, W> {
         self.compressed_bytes
     }
 
+    /// Returns the current offset in the output stream.
+    ///
+    /// See [`ZipArchiveWriter::stream_offset`] for more information.
+    pub fn stream_offset(&self) -> u64 {
+        self.inner.stream_offset()
+    }
+
     /// Finishes writing the file entry.
     ///
     /// This writes the data descriptor if necessary and adds the file entry to the central directory.
@@ -1045,5 +1104,43 @@ mod tests {
         file.finish(desc).unwrap();
 
         archive.finish().unwrap();
+    }
+
+    #[test]
+    fn test_stream_offset_methods() {
+        let mut output = Cursor::new(Vec::new());
+        let mut archive = ZipArchiveWriter::new(&mut output);
+
+        // Test case 1: Get local header offset
+        let local_header_offset = archive.stream_offset();
+        let mut file = archive.new_file("test.txt").create().unwrap();
+
+        // Test case 2: Get start of data offset
+        let data_start_offset = file.stream_offset();
+
+        // Write some data
+        let mut writer = ZipDataWriter::new(&mut file);
+        writer.write_all(b"Hello World").unwrap();
+        let (_, desc) = writer.finish().unwrap();
+
+        // Test case 3: Get end of compressed data offset
+        let end_data_offset = file.stream_offset();
+
+        let compressed_bytes = file.finish(desc).unwrap();
+
+        // Test case 4: Get end of data descriptor offset (next file's local header offset)
+        let end_descriptor_offset = archive.stream_offset();
+
+        archive.finish().unwrap();
+
+        // Verify the offsets make sense
+        assert_eq!(local_header_offset, 0);
+        assert!(data_start_offset > local_header_offset);
+        assert_eq!(
+            end_data_offset,
+            data_start_offset + b"Hello World".len() as u64
+        );
+        assert_eq!(end_descriptor_offset, end_data_offset + 16); // 16 bytes for data descriptor
+        assert_eq!(compressed_bytes, end_data_offset - data_start_offset);
     }
 }
