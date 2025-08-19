@@ -3,6 +3,8 @@ use std::io::Read;
 use std::ops::Range;
 #[cfg(unix)]
 use std::os::unix::fs::FileExt;
+#[cfg(windows)]
+use std::os::windows::fs::FileExt;
 use std::{rc::Rc, sync::Arc};
 
 /// Provides reading bytes at a specific offset
@@ -88,18 +90,18 @@ impl<T: ReaderAt> ReaderAtExt for T {
     }
 }
 
-#[cfg(not(unix))]
+#[cfg(not(any(unix, windows)))]
 pub struct FileReader(MutexReader<std::fs::File>);
 
 /// A file wrapper that implements [`ReaderAt`] across platforms.
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 pub struct FileReader(std::fs::File);
 
 impl FileReader {
     pub fn into_inner(self) -> std::fs::File {
-        #[cfg(not(unix))]
+        #[cfg(not(any(unix, windows)))]
         return self.0.into_inner();
-        #[cfg(unix)]
+        #[cfg(any(unix, windows))]
         return self.0;
     }
 }
@@ -107,7 +109,10 @@ impl FileReader {
 impl ReaderAt for FileReader {
     #[inline]
     fn read_at(&self, buf: &mut [u8], offset: u64) -> std::io::Result<usize> {
-        self.0.read_at(buf, offset)
+        #[cfg(unix)]
+        return self.0.read_at(buf, offset);
+        #[cfg(windows)]
+        return self.0.seek_read(buf, offset);
     }
 }
 
@@ -119,12 +124,12 @@ impl std::io::Seek for FileReader {
 }
 
 impl From<std::fs::File> for FileReader {
-    #[cfg(not(unix))]
+    #[cfg(not(any(unix, windows)))]
     fn from(file: std::fs::File) -> Self {
         Self(MutexReader(std::sync::Mutex::new(file)))
     }
 
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     fn from(file: std::fs::File) -> Self {
         Self(file)
     }
