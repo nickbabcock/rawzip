@@ -412,6 +412,11 @@ impl<R> ZipArchive<R> {
         &self.reader
     }
 
+    /// Consumes this archive and returns the underlying reader.
+    pub fn into_inner(self) -> R {
+        self.reader
+    }
+
     /// Returns a lending iterator over the entries in the central directory of
     /// the archive.
     ///
@@ -1708,7 +1713,7 @@ impl<'a> ZipFileHeaderRecord<'a> {
     ///             }
     ///         }
     ///     }
-    ///     
+    ///
     ///     // If desired, check for truncated data
     ///     if !extra_fields.remaining_bytes().is_empty() {
     ///         println!("Warning: Some extra field data was truncated");
