@@ -204,11 +204,8 @@ impl ExtraFieldsContainer {
         } else if filter == Header::CENTRAL && self.central_size == 0 {
             // No central fields to write
             Ok(())
-        } else if self.local_size == self.central_size
-            || (self.local_size == 0 || self.central_size == 0)
-        {
-            // If there are no mixed fields or everything is one sided, we can
-            // dump everything
+        } else if self.local_size == 0 || self.central_size == 0 {
+            // If everything is one sided, we can dump everything
             writer.write_all(self.data_buffer.as_slice())?;
             Ok(())
         } else {
@@ -336,6 +333,8 @@ where
 
 #[cfg(test)]
 mod tests {
+    use std::io::Cursor;
+
     use super::*;
 
     #[test]
@@ -408,5 +407,48 @@ mod tests {
 
         let cloned = buf.clone();
         assert_eq!(buf.as_slice(), cloned.as_slice());
+    }
+
+    fn round_trip_extra_fields(fields: &[(ExtraFieldId, &[u8], Header)]) {
+        let mut container = ExtraFieldsContainer::new();
+
+        for (id, data, location) in fields {
+            container.add_field(*id, data, *location).unwrap();
+        }
+
+        for location in [Header::LOCAL, Header::CENTRAL] {
+            let mut cursor = Cursor::new(Vec::new());
+            container.write_extra_fields(&mut cursor, location).unwrap();
+
+            let written_fields = fields
+                .iter()
+                .filter(|&&(_, _, loc)| loc == location)
+                .map(|&(id, data, _)| (id, data))
+                .collect::<Vec<_>>();
+            let read_fields = ExtraFields::new(cursor.get_ref()).collect::<Vec<_>>();
+
+            assert_eq!(written_fields, read_fields);
+        }
+    }
+
+    #[test]
+    fn test_extra_fields() {
+        // Only local extra fields
+        round_trip_extra_fields(&[
+            (ExtraFieldId::new(0), &[0u8; 16], Header::LOCAL),
+            (ExtraFieldId::new(1), &[1u8; 16], Header::LOCAL),
+        ]);
+
+        // Only central extra fields
+        round_trip_extra_fields(&[
+            (ExtraFieldId::new(0), &[0u8; 16], Header::CENTRAL),
+            (ExtraFieldId::new(1), &[1u8; 16], Header::CENTRAL),
+        ]);
+
+        // Mixed extra fields where the local and central sizes are the same
+        round_trip_extra_fields(&[
+            (ExtraFieldId::new(0), &[0u8; 16], Header::CENTRAL),
+            (ExtraFieldId::new(1), &[1u8; 16], Header::LOCAL),
+        ]);
     }
 }
