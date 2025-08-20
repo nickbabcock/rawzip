@@ -937,3 +937,47 @@ fn test_filename_mismatch_handling() {
     let slice_local_filename = slice_entry.file_path();
     assert_eq!(slice_local_filename.as_ref(), b"safe_file.txt",);
 }
+
+#[test]
+fn test_central_directory_offset_consistency() {
+    let test_files = [
+        "test.zip",
+        "test-prefix.zip",
+        "test-trailing-junk.zip",
+        "unix.zip",
+        "winxp.zip",
+        "zip64-2.zip",
+        "zip64.zip",
+    ];
+
+    for test_file in &test_files {
+        let file_path = Path::new("assets").join(test_file);
+        let data = std::fs::read(&file_path).unwrap();
+
+        // Test with ZipSliceArchive
+        let slice_archive = ZipArchive::from_slice(data.as_slice()).unwrap();
+        let slice_entries: Vec<_> = slice_archive
+            .entries()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+
+        // Test with ZipArchive
+        let file = File::open(&file_path).unwrap();
+        let mut buf = vec![0u8; rawzip::RECOMMENDED_BUFFER_SIZE];
+        let file_archive = ZipArchive::from_file(file, &mut buf).unwrap();
+
+        let mut entries_iter = file_archive.entries(&mut buf);
+        for slice_entry in slice_entries.iter() {
+            let file_entry = entries_iter.next_entry().unwrap().unwrap();
+            assert_eq!(
+                slice_entry.central_directory_offset(),
+                file_entry.central_directory_offset(),
+                "Central directory offset mismatch",
+            );
+        }
+        assert!(
+            entries_iter.next_entry().unwrap().is_none(),
+            "More entries in file archive than in slice archive"
+        );
+    }
+}
