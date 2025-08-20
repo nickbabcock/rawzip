@@ -59,11 +59,12 @@ impl<T: AsRef<[u8]>> ZipSliceArchive<T> {
     /// Returns an iterator over the entries in the central directory of the archive.
     pub fn entries(&self) -> ZipSliceEntries<'_> {
         let data = self.data.as_ref();
-        let entry_data =
-            &data[(self.eocd.directory_offset() as usize)..self.eocd.head_eocd_offset() as usize];
+        let directory_start = self.eocd.directory_offset();
+        let entry_data = &data[(directory_start as usize)..self.eocd.head_eocd_offset() as usize];
         ZipSliceEntries {
             entry_data,
             base_offset: self.eocd.base_offset(),
+            current_offset: directory_start,
         }
     }
 
@@ -286,6 +287,7 @@ where
 pub struct ZipSliceEntries<'data> {
     entry_data: &'data [u8],
     base_offset: u64,
+    current_offset: u64,
 }
 
 impl<'data> ZipSliceEntries<'data> {
@@ -297,16 +299,21 @@ impl<'data> ZipSliceEntries<'data> {
         }
 
         let file_header = ZipFileHeaderFixed::parse(self.entry_data)?;
-        self.entry_data = &self.entry_data[ZipFileHeaderFixed::SIZE..];
         let Some((file_name, extra_field, file_comment, entry_data)) =
-            file_header.parse_variable_length(self.entry_data)
+            file_header.parse_variable_length(&self.entry_data[ZipFileHeaderFixed::SIZE..])
         else {
             return Err(Error::from(ErrorKind::Eof));
         };
 
-        let mut entry =
-            ZipFileHeaderRecord::from_parts(file_header, file_name, extra_field, file_comment);
+        let mut entry = ZipFileHeaderRecord::from_parts(
+            file_header,
+            file_name,
+            extra_field,
+            file_comment,
+            self.current_offset,
+        );
         entry.local_header_offset += self.base_offset;
+        self.current_offset += (self.entry_data.len() - entry_data.len()) as u64;
         self.entry_data = entry_data;
         Ok(Some(entry))
     }
@@ -1122,6 +1129,7 @@ where
             self.end = remaining + read;
         }
 
+        let central_directory_offset = self.offset - (self.end - self.pos) as u64;
         let data = &self.buffer[self.pos..self.end];
         let file_header = ZipFileHeaderFixed::parse(data)?;
         self.pos += ZipFileHeaderFixed::SIZE;
@@ -1147,8 +1155,13 @@ where
         let (file_name, extra_field, file_comment, _) = file_header
             .parse_variable_length(data)
             .expect("variable length precheck failed");
-        let mut file_header =
-            ZipFileHeaderRecord::from_parts(file_header, file_name, extra_field, file_comment);
+        let mut file_header = ZipFileHeaderRecord::from_parts(
+            file_header,
+            file_name,
+            extra_field,
+            file_comment,
+            central_directory_offset,
+        );
         file_header.local_header_offset += self.base_offset;
         self.pos += variable_length;
         Ok(Some(file_header))
@@ -1457,6 +1470,7 @@ pub struct ZipFileHeaderRecord<'a> {
     internal_file_attrs: u16,
     external_file_attrs: u32,
     local_header_offset: u64,
+    central_directory_offset: u64,
     file_name: ZipFilePath<RawPath<'a>>,
     extra_field: &'a [u8],
     file_comment: ZipStr<'a>,
@@ -1470,6 +1484,7 @@ impl<'a> ZipFileHeaderRecord<'a> {
         file_name: &'a [u8],
         extra_field: &'a [u8],
         file_comment: &'a [u8],
+        central_directory_offset: u64,
     ) -> Self {
         let mut result = Self {
             signature: header.signature,
@@ -1489,6 +1504,7 @@ impl<'a> ZipFileHeaderRecord<'a> {
             internal_file_attrs: header.internal_file_attrs,
             external_file_attrs: header.external_file_attrs,
             local_header_offset: u64::from(header.local_header_offset),
+            central_directory_offset,
             file_name: ZipFilePath::from_bytes(file_name),
             extra_field,
             file_comment: ZipStr::new(file_comment),
@@ -1687,6 +1703,23 @@ impl<'a> ZipFileHeaderRecord<'a> {
         }
 
         EntryMode::new(mode)
+    }
+
+    /// The declared CRC32 checksum of the uncompressed data.
+    ///
+    /// To verify the validity of this value, [`ZipEntry::verifying_reader`]
+    /// will return an error if when the decompressed data does not match this
+    /// checksum.
+    #[inline]
+    pub fn crc32(&self) -> u32 {
+        self.crc32
+    }
+
+    /// Returns the offset from the start of reader where this central directory
+    /// record was parsed from.
+    #[inline]
+    pub fn central_directory_offset(&self) -> u64 {
+        self.central_directory_offset
     }
 
     /// Returns an iterator over the extra fields in this file header record.
