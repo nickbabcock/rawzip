@@ -48,37 +48,39 @@
 //! // From raw bytes
 //! let raw_path = ZipFilePath::from_bytes(b"../../../etc/passwd");
 //! let safe_path = raw_path.try_normalize()?; // Returns error if invalid UTF-8
-//! assert_eq!(safe_path.as_ref(), "etc/passwd");
+//! assert_eq!(safe_path.as_str(), "etc/passwd");
 //!
 //! // From string
 //! let normalized_path = ZipFilePath::from_str("dir\\file.txt");
-//! assert_eq!(normalized_path.as_ref(), "dir/file.txt");
+//! assert_eq!(normalized_path.as_str(), "dir/file.txt");
 //! assert_eq!(String::from(normalized_path), "dir/file.txt");
-//! # Ok::<(), Box<dyn std::error::Error>>(())
-//! ```
-//!
-//! ```rust
-//! use rawzip::path::ZipFilePath;
 //!
 //! // Backslashes to forward slashes
 //! let path = ZipFilePath::from_str("dir\\subdir\\file.txt");
-//! assert_eq!(path.as_ref(), "dir/subdir/file.txt");
+//! assert_eq!(path.as_str(), "dir/subdir/file.txt");
 //!
 //! // Remove redundant slashes
 //! let path = ZipFilePath::from_str("dir//subdir///file.txt");
-//! assert_eq!(path.as_ref(), "dir/subdir/file.txt");
+//! assert_eq!(path.as_str(), "dir/subdir/file.txt");
 //!
 //! // Resolve relative components
 //! let path = ZipFilePath::from_str("dir/../file.txt");
-//! assert_eq!(path.as_ref(), "file.txt");
+//! assert_eq!(path.as_str(), "file.txt");
 //!
 //! // Remove leading slashes (absolute → relative)
 //! let path = ZipFilePath::from_str("/etc/passwd");
-//! assert_eq!(path.as_ref(), "etc/passwd");
+//! assert_eq!(path.as_str(), "etc/passwd");
 //!
 //! // Prevent directory traversal
 //! let path = ZipFilePath::from_str("../../../etc/passwd");
-//! assert_eq!(path.as_ref(), "etc/passwd");
+//! assert_eq!(path.as_str(), "etc/passwd");
+//!
+//! // Get string from normalized path
+//! let path = ZipFilePath::from_str("dir/file.txt");
+//! let my_str = String::from(path.into_owned());
+//! assert_eq!(my_str, String::from("dir/file.txt"));
+//!
+//! # Ok::<(), Box<dyn std::error::Error>>(())
 //! ```
 //!
 //! ## UTF-8 Encoding Detection
@@ -280,14 +282,13 @@ where
     }
 }
 
-impl AsRef<[u8]> for ZipFilePath<RawPath<'_>> {
-    /// Returns the raw bytes of the ZIP file path.
-    fn as_ref(&self) -> &[u8] {
+impl<'a> ZipFilePath<RawPath<'a>> {
+    /// Returns the raw bytes of the zip file path.
+    #[inline]
+    pub fn as_bytes(&self) -> &'a [u8] {
         self.data.0.as_bytes()
     }
-}
 
-impl<'a> ZipFilePath<RawPath<'a>> {
     /// Attempts to normalize this raw path into a safe, validated path.
     ///
     /// Validates the raw bytes as UTF-8 and applies normalization rules.
@@ -300,6 +301,13 @@ impl<'a> ZipFilePath<RawPath<'a>> {
         let raw_data = self.data.0;
         let name = std::str::from_utf8(raw_data.as_bytes()).map_err(Error::utf8)?;
         Ok(ZipFilePath::from_str(name))
+    }
+}
+
+impl AsRef<[u8]> for ZipFilePath<RawPath<'_>> {
+    #[inline]
+    fn as_ref(&self) -> &[u8] {
+        self.data.0.as_bytes()
     }
 }
 
@@ -332,6 +340,12 @@ impl From<ZipFilePath<NormalizedPath<'_>>> for String {
 }
 
 impl ZipFilePath<NormalizedPath<'_>> {
+    /// Returns the normalized string slice.
+    #[inline]
+    pub fn as_str(&self) -> &str {
+        self.data.0.as_ref()
+    }
+
     /// Converts this borrowed path into an owned path.
     ///
     /// Similar to [`Cow::into_owned`]
@@ -340,6 +354,14 @@ impl ZipFilePath<NormalizedPath<'_>> {
         ZipFilePath {
             data: NormalizedPathBuf(self.data.0.into_owned()),
         }
+    }
+}
+
+impl ZipFilePath<NormalizedPathBuf> {
+    /// Returns the normalized string slice.
+    #[inline]
+    pub fn as_str(&self) -> &str {
+        self.data.0.as_ref()
     }
 }
 
@@ -435,5 +457,19 @@ mod tests {
             .unwrap();
         assert_eq!(normalized_path.as_ref(), "test.txt");
         assert_eq!(normalized_path.len(), 8);
+    }
+
+    #[test]
+    fn test_raw_path_lifetime_preservation() {
+        use std::str::Utf8Error;
+
+        // See https://github.com/nickbabcock/rawzip/issues/101
+        fn file_path_utf8<'a>(path: ZipFilePath<RawPath<'a>>) -> Result<&'a str, Utf8Error> {
+            std::str::from_utf8(path.as_bytes())
+        }
+
+        let raw_path = ZipFilePath::from_bytes(b"test/file.txt");
+        let result = file_path_utf8(raw_path).unwrap();
+        assert_eq!(result, "test/file.txt");
     }
 }
