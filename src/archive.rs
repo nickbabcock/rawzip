@@ -620,7 +620,7 @@ where
 
     /// Returns a reader that wraps a decompressor and verify the size and CRC
     /// of the decompressed data once finished.
-    pub fn verifying_reader<D>(&self, reader: D) -> ZipVerifier<'archive, D, R>
+    pub fn verifying_reader<D>(&self, reader: D) -> ZipVerifier<D, &'archive R>
     where
         D: std::io::Read,
     {
@@ -628,7 +628,7 @@ where
             reader,
             crc: 0,
             size: 0,
-            archive: self.archive,
+            archive: self.archive.get_ref(),
             end_offset: self.body_end_offset,
             wayfinder: self.entry,
         }
@@ -807,23 +807,23 @@ impl ZipVerification {
 
 /// Verifies the checksum of the decompressed data matches the checksum listed in the zip
 #[derive(Debug, Clone)]
-pub struct ZipVerifier<'archive, Decompressor, ReaderAt> {
+pub struct ZipVerifier<Decompressor, ReaderAt> {
     reader: Decompressor,
     crc: u32,
     size: u64,
-    archive: &'archive ZipArchive<ReaderAt>,
+    archive: ReaderAt,
     end_offset: u64,
     wayfinder: ZipArchiveEntryWayfinder,
 }
 
-impl<Decompressor, ReaderAt> ZipVerifier<'_, Decompressor, ReaderAt> {
+impl<Decompressor, ReaderAt> ZipVerifier<Decompressor, ReaderAt> {
     /// Consumes the [`ZipVerifier`], returning the underlying decompressor.
     pub fn into_inner(self) -> Decompressor {
         self.reader
     }
 }
 
-impl<Decompressor, Reader> std::io::Read for ZipVerifier<'_, Decompressor, Reader>
+impl<Decompressor, Reader> std::io::Read for ZipVerifier<Decompressor, Reader>
 where
     Decompressor: std::io::Read,
     Reader: ReaderAt,
@@ -835,7 +835,7 @@ where
 
         if read == 0 || self.size >= self.wayfinder.uncompressed_size_hint() {
             let crc = if self.wayfinder.has_data_descriptor {
-                DataDescriptor::read_at(&self.archive.reader, self.end_offset).map(|x| x.crc)
+                DataDescriptor::read_at(&self.archive, self.end_offset).map(|x| x.crc)
             } else {
                 Ok(self.crc)
             };
