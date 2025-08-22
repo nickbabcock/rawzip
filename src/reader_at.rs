@@ -113,6 +113,8 @@ impl ReaderAt for FileReader {
         return self.0.read_at(buf, offset);
         #[cfg(windows)]
         return self.0.seek_read(buf, offset);
+        #[cfg(not(any(unix, windows)))]
+        return self.0.read_at(buf, offset);
     }
 }
 
