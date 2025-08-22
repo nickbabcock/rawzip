@@ -122,6 +122,19 @@ jobs:
       - run: cargo install cargo-fuzz
       - run: cargo fuzz build fuzz_zip
 
+  wasm:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: stable
+          targets: wasm32-unknown-unknown
+      - name: Build for wasm32-unknown-unknown
+        run: cargo build --target wasm32-unknown-unknown --verbose
+
   big-example:
     runs-on: ubuntu-latest
     steps:
