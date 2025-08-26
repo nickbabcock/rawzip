@@ -2,12 +2,13 @@ use crate::errors::{Error, ErrorKind};
 use crate::reader_at::{FileReader, ReaderAtExt};
 use crate::utils::{le_u16, le_u32, le_u64};
 use crate::{
-    EndOfCentralDirectory, ReaderAt, Zip64EndOfCentralDirectory, Zip64EndOfCentralDirectoryRecord,
-    ZipArchive, ZipSliceArchive, END_OF_CENTRAL_DIR_LOCATOR_SIGNATURE,
+    ReaderAt, Zip64EndOfCentralDirectory, Zip64EndOfCentralDirectoryRecord, ZipArchive,
+    ZipFileHeaderFixed, ZipSliceArchive, END_OF_CENTRAL_DIR_LOCATOR_SIGNATURE,
 };
 use std::cell::RefCell;
 use std::fs::File;
 use std::io::Seek;
+use std::num::NonZeroU64;
 
 const END_OF_CENTRAL_DIR_SIGNAUTRE: u32 = 0x06054b50;
 pub(crate) const END_OF_CENTRAL_DIR_SIGNAUTRE_BYTES: [u8; 4] =
@@ -61,8 +62,38 @@ impl ZipLocator {
         let location = find_end_of_central_dir_signature(data, self.max_search_space as usize)
             .ok_or(ErrorKind::MissingEndOfCentralDirectory)?;
 
-        self.locate_in_byte_slice_impl(data, location)
-            .map_err(|e| e.with_eocd_offset(location as u64))
+        let mut eocd = self
+            .locate_in_byte_slice_impl(data, location)
+            .map_err(|e| e.with_eocd_offset(location as u64))?;
+
+        // Transparently verify that the self reported central directory points
+        // to a valid entry. If it is not a valid entry, we can attempt to
+        // correct offsets when there is undeclared prelude data by testing if
+        // the central directory directly precedes the end of central directory
+        // marker, which should hold true in the vast majority of cases. If both
+        // checks fail, defer returning an error until the user explicitly wants
+        // to iterate through the central directory.
+        let first_entry = data
+            .get(eocd.central_dir_offset as usize..)
+            .filter(|d| ZipFileHeaderFixed::parse(d).is_ok());
+
+        match first_entry {
+            None if !eocd.is_zip64() => {
+                let cd_offset = eocd.eocd_offset.saturating_sub(eocd.central_dir_size);
+
+                let first_entry = data
+                    .get(cd_offset as usize..)
+                    .filter(|d| ZipFileHeaderFixed::parse(d).is_ok());
+
+                if first_entry.is_some() {
+                    eocd.base_offset = cd_offset.saturating_sub(eocd.central_dir_offset);
+                    eocd.central_dir_offset = cd_offset;
+                }
+
+                Ok(eocd)
+            }
+            _ => Ok(eocd),
+        }
     }
 
     fn locate_in_byte_slice_impl(
@@ -257,8 +288,38 @@ impl ZipLocator {
             }
         };
 
-        self.locate_in_reader_impl(reader, buffer, eocd_offset, buffer_pos, buffer_valid_len)
-            .map_err(|(reader, e)| (reader, e.with_eocd_offset(eocd_offset)))
+        let (reader, mut eocd) = self
+            .locate_in_reader_impl(reader, buffer, eocd_offset, buffer_pos, buffer_valid_len)
+            .map_err(|(reader, e)| (reader, e.with_eocd_offset(eocd_offset)))?;
+
+        // Check first entry in central directory, see
+        // `ZipLocator::locate_in_byte_slice` for more info
+        let first_entry = reader
+            .read_exact_at(
+                &mut buffer[..ZipFileHeaderFixed::SIZE],
+                eocd.central_dir_offset,
+            )
+            .ok()
+            .filter(|_| ZipFileHeaderFixed::parse(buffer).is_ok());
+
+        match first_entry {
+            None if !eocd.is_zip64() => {
+                let cd_offset = eocd.eocd_offset.saturating_sub(eocd.central_dir_size);
+
+                let first_entry = reader
+                    .read_exact_at(&mut buffer[..ZipFileHeaderFixed::SIZE], cd_offset)
+                    .ok()
+                    .filter(|_| ZipFileHeaderFixed::parse(buffer).is_ok());
+
+                if first_entry.is_some() {
+                    eocd.base_offset = cd_offset.saturating_sub(eocd.central_dir_offset);
+                    eocd.central_dir_offset = cd_offset;
+                }
+
+                Ok(ZipArchive::new(reader, eocd))
+            }
+            _ => Ok(ZipArchive::new(reader, eocd)),
+        }
     }
 
     fn locate_in_reader_impl<R>(
@@ -268,7 +329,7 @@ impl ZipLocator {
         eocd_offset: u64,
         buffer_pos: usize,
         buffer_valid_len: usize,
-    ) -> Result<ZipArchive<R>, (R, Error)>
+    ) -> Result<(R, EndOfCentralDirectory), (R, Error)>
     where
         R: ReaderAt,
     {
@@ -326,7 +387,7 @@ impl ZipLocator {
         let eocd = EndOfCentralDirectoryRecord::from_parts(eocd_offset, eocd);
         if !is_zip64 {
             return match EndOfCentralDirectory::create(eocd) {
-                Ok(eocd) => Ok(ZipArchive::new(reader.inner, eocd)),
+                Ok(eocd) => Ok((reader.inner, eocd)),
                 Err(e) => Err((reader.inner, e)),
             };
         }
@@ -399,9 +460,110 @@ impl ZipLocator {
         let zip_eocd =
             Zip64EndOfCentralDirectory::from_parts(zip64_locator.directory_offset, zip64_record);
         match EndOfCentralDirectory::create_zip64(eocd, zip_eocd) {
-            Ok(eocd) => Ok(ZipArchive::new(reader.inner, eocd)),
+            Ok(eocd) => Ok((reader.inner, eocd)),
             Err(e) => Err((reader.inner, e)),
         }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct EndOfCentralDirectory {
+    eocd_offset: u64,
+    zip64_eocd_offset: Option<NonZeroU64>,
+    central_dir_size: u64,
+    central_dir_offset: u64,
+    num_entries: u64,
+    comment_len: u16,
+    base_offset: u64,
+}
+
+impl EndOfCentralDirectory {
+    pub(crate) fn create(eocd: EndOfCentralDirectoryRecord) -> Result<Self, Error> {
+        let result = EndOfCentralDirectory {
+            eocd_offset: eocd.offset,
+            zip64_eocd_offset: None,
+            central_dir_size: u64::from(eocd.central_dir_size),
+            central_dir_offset: u64::from(eocd.central_dir_offset),
+            num_entries: u64::from(eocd.num_entries),
+            comment_len: eocd.comment_len,
+            base_offset: 0,
+        };
+
+        result.validate()?;
+        Ok(result)
+    }
+
+    pub(crate) fn create_zip64(
+        eocd: EndOfCentralDirectoryRecord,
+        zip64: Zip64EndOfCentralDirectory,
+    ) -> Result<Self, Error> {
+        let result = EndOfCentralDirectory {
+            eocd_offset: eocd.offset,
+            zip64_eocd_offset: NonZeroU64::new(zip64.offset),
+            central_dir_size: zip64.central_dir_size,
+            central_dir_offset: zip64.central_dir_offset,
+            num_entries: zip64.num_entries,
+            comment_len: eocd.comment_len,
+            base_offset: 0,
+        };
+
+        result.validate()?;
+        Ok(result)
+    }
+
+    fn validate(&self) -> Result<(), Error> {
+        // It doesn't make sense if the start of the central directory is after
+        // the end.
+        if self.directory_offset() > self.head_eocd_offset() {
+            return Err(Error::from(ErrorKind::InvalidEndOfCentralDirectory));
+        }
+
+        Ok(())
+    }
+
+    #[inline]
+    pub(crate) fn is_zip64(&self) -> bool {
+        self.zip64_eocd_offset.is_some()
+    }
+
+    pub(crate) fn base_offset(&self) -> u64 {
+        self.base_offset
+    }
+
+    /// The first end of the central directory signature offsets.
+    ///
+    /// This is offset where no new central directory records are expected.
+    ///
+    /// Will be equivalent to [`Self::tail_eocd_offset`] eocd for non-zip64 files
+    #[inline]
+    pub(crate) fn head_eocd_offset(&self) -> u64 {
+        self.zip64_eocd_offset
+            .map(|x| x.get())
+            .unwrap_or(self.eocd_offset)
+    }
+
+    /// The last end of the central directory signature offsets.
+    ///
+    /// This will always be the byte offset of 0x06054b50
+    #[inline]
+    pub(crate) fn tail_eocd_offset(&self) -> u64 {
+        self.eocd_offset
+    }
+
+    /// offset of the start of the central directory
+    #[inline]
+    pub(crate) fn directory_offset(&self) -> u64 {
+        self.central_dir_offset
+    }
+
+    #[inline]
+    pub(crate) fn entries(&self) -> u64 {
+        self.num_entries
+    }
+
+    #[inline]
+    pub(crate) fn comment_len(&self) -> usize {
+        self.comment_len as usize
     }
 }
 

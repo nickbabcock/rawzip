@@ -9,9 +9,8 @@ use crate::path::{RawPath, ZipFilePath};
 use crate::reader_at::{FileReader, MutexReader, RangeReader, ReaderAt, ReaderAtExt};
 use crate::time::{extract_best_timestamp, ZipDateTimeKind};
 use crate::utils::{le_u16, le_u32, le_u64};
-use crate::{EndOfCentralDirectoryRecord, EndOfCentralDirectoryRecordFixed, ZipLocator};
+use crate::{EndOfCentralDirectory, EndOfCentralDirectoryRecordFixed, ZipLocator};
 use std::io::{Read, Seek, Write};
-use std::num::NonZeroU64;
 
 pub(crate) const END_OF_CENTRAL_DIR_SIGNATURE64: u32 = 0x06064b50;
 pub(crate) const END_OF_CENTRAL_DIR_LOCATOR_SIGNATURE: u32 = 0x07064b50;
@@ -100,7 +99,7 @@ impl<T: AsRef<[u8]>> ZipSliceArchive<T> {
     ///
     /// See [`ZipArchive::end_offset`] for more details.
     pub fn end_offset(&self) -> u64 {
-        self.eocd.eocd_offset
+        self.eocd.tail_eocd_offset()
             + EndOfCentralDirectoryRecordFixed::SIZE as u64
             + self.comment().as_bytes().len() as u64
     }
@@ -554,7 +553,7 @@ impl<R> ZipArchive<R> {
     /// range (and thus size) of the ZIP archive within a context of a larger
     /// file.
     pub fn end_offset(&self) -> u64 {
-        self.eocd.eocd_offset
+        self.eocd.tail_eocd_offset()
             + EndOfCentralDirectoryRecordFixed::SIZE as u64
             + self.comment().remaining()
     }
@@ -972,119 +971,6 @@ impl DataDescriptor {
         let mut buffer = [0u8; Self::SIZE];
         reader.read_exact_at(&mut buffer, offset)?;
         Self::parse(&buffer)
-    }
-}
-
-#[derive(Debug, Clone)]
-pub(crate) struct EndOfCentralDirectory {
-    eocd_offset: u64,
-    zip64_eocd_offset: Option<NonZeroU64>,
-    central_dir_size: u64,
-    central_dir_offset: u64,
-    num_entries: u64,
-    comment_len: u16,
-}
-
-impl EndOfCentralDirectory {
-    pub(crate) fn create(eocd: EndOfCentralDirectoryRecord) -> Result<Self, Error> {
-        let result = EndOfCentralDirectory {
-            eocd_offset: eocd.offset,
-            zip64_eocd_offset: None,
-            central_dir_size: u64::from(eocd.central_dir_size),
-            central_dir_offset: u64::from(eocd.central_dir_offset),
-            num_entries: u64::from(eocd.num_entries),
-            comment_len: eocd.comment_len,
-        };
-
-        result.validate()?;
-        Ok(result)
-    }
-
-    pub(crate) fn create_zip64(
-        eocd: EndOfCentralDirectoryRecord,
-        zip64: Zip64EndOfCentralDirectory,
-    ) -> Result<Self, Error> {
-        let result = EndOfCentralDirectory {
-            eocd_offset: eocd.offset,
-            zip64_eocd_offset: NonZeroU64::new(zip64.offset),
-            central_dir_size: zip64.central_dir_size,
-            central_dir_offset: zip64.central_dir_offset,
-            num_entries: zip64.num_entries,
-            comment_len: eocd.comment_len,
-        };
-
-        result.validate()?;
-        Ok(result)
-    }
-
-    fn validate(&self) -> Result<(), Error> {
-        // It doesn't make sense if the start of the central directory is after
-        // the end.
-        if self.directory_offset() > self.head_eocd_offset() {
-            return Err(Error::from(ErrorKind::InvalidEndOfCentralDirectory));
-        }
-
-        Ok(())
-    }
-
-    /// the start of the zip file proper.
-    #[inline]
-    fn base_offset(&self) -> u64 {
-        match self.zip64_eocd_offset {
-            Some(_) => 0,
-            None => {
-                self.eocd_offset
-                    .saturating_sub(self.central_dir_size)
-                    .saturating_sub(self.central_dir_offset)
-
-                // In the case that the base_offset is calculated to be non-zero
-                // Go's zip reader will check if base_offset of zero would
-                // correspond to a valid directory header and if so, set it to
-                // zero anyways.
-                // https://github.com/golang/go/blob/c0e149b6b1aa2daca64c00804809bc2279e21eee/src/archive/zip/reader.go#L636
-                //
-                // Neither rc-zip or rust's zip crate can handle the file so we
-                // don't either
-                //
-                // See Go's test-badbase.zip and test-baddirsz.zip for test cases
-            }
-        }
-    }
-
-    /// The first end of the central directory signature offsets.
-    ///
-    /// This is offset where no new central directory records are expected.
-    ///
-    /// Will be equivalent to [`Self::tail_eocd_offset`] eocd for non-zip64 files
-    #[inline]
-    fn head_eocd_offset(&self) -> u64 {
-        self.zip64_eocd_offset
-            .map(|x| x.get())
-            .unwrap_or(self.eocd_offset)
-    }
-
-    /// The last end of the central directory signature offsets.
-    ///
-    /// This will always be the byte offset of 0x06054b50
-    #[inline]
-    fn tail_eocd_offset(&self) -> u64 {
-        self.eocd_offset
-    }
-
-    /// offset of the start of the central directory
-    #[inline]
-    fn directory_offset(&self) -> u64 {
-        self.base_offset() + self.central_dir_offset
-    }
-
-    #[inline]
-    fn entries(&self) -> u64 {
-        self.num_entries
-    }
-
-    #[inline]
-    fn comment_len(&self) -> usize {
-        self.comment_len as usize
     }
 }
 
@@ -1903,7 +1789,7 @@ type VariableFields<'a> = (
 );
 
 impl ZipFileHeaderFixed {
-    const SIZE: usize = 46;
+    pub(crate) const SIZE: usize = 46;
 
     #[inline]
     pub fn parse(data: &[u8]) -> Result<ZipFileHeaderFixed, Error> {
