@@ -113,7 +113,7 @@ What consumers must handle:
 - Symlink attacks with safe file system operations
 - Zip quines and potentially infinite recursion by limiting the amount of nesting
 - Multiple file entries with the same file name
-- Relocated central directory. Rawzip uses the end of the central directory record offset as a sentinel to stop iteration through the central directory, and pushes the error suppression of relocated central directories formula based on the number of self-reported entries or size of central directory to consumers.
+- Unexpected central directory entry count. When the central directory iterator ends or errors, check against the number of expected entries to know whether an error should be raised or suppressed.
 
 ## Benchmarks
 
