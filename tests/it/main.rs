@@ -464,6 +464,33 @@ zip_test_case!(
     }
 );
 
+zip_test_case!(
+    "baddirsz",
+    ZipTestCase {
+        name: "test-baddirsz.zip",
+        comment: Some(b"This is a zipfile comment."),
+        files: vec![
+            ZipTestFileEntry {
+                name: "test.txt",
+                expected_content: ExpectedContent::Content(b"This is a test text file.\n".to_vec(),),
+                expected_datetime: Some(ZipDateTimeKind::Utc(
+                    UtcDateTime::from_components(2010, 9, 5, 2, 12, 1, 0).unwrap()
+                )), // 2010-09-05 02:12:01 UTC
+                expected_mode: Some(0o100644), // Regular file with 644 permissions
+            },
+            ZipTestFileEntry {
+                name: "gophercolor16x16.png",
+                expected_content: ExpectedContent::File("gophercolor16x16.png"),
+                expected_datetime: Some(ZipDateTimeKind::Utc(
+                    UtcDateTime::from_components(2010, 9, 5, 5, 52, 58, 0).unwrap()
+                )), // 2010-09-05 05:52:58 UTC
+                expected_mode: Some(0o100644), // Regular file with 644 permissions
+            },
+        ],
+        ..Default::default()
+    }
+);
+
 fn process_archive_files<R: rawzip::ReaderAt>(
     archive: &rawzip::ZipArchive<R>,
     case: &ZipTestCase,
