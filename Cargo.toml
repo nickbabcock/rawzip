@@ -9,7 +9,7 @@ readme = "README.md"
 license = "MIT"
 keywords = ["zip", "archive"]
 categories = ["filesystem", "compression", "parser-implementations"]
-include = ["src/**/*.rs"]
+include = ["src/**/*.rs", "/examples"]
 rust-version = "1.70"
 
 [dependencies]
