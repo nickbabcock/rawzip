@@ -112,6 +112,8 @@ What consumers must handle:
 - Zip bombs by implementing max compression ratios, max file sizes, and checks for overlapping file data
 - Symlink attacks with safe file system operations
 - Zip quines and potentially infinite recursion by limiting the amount of nesting
+- Multiple file entries with the same file name
+- Relocated central directory. Rawzip uses the end of the central directory record offset as a sentinel to stop iteration through the central directory, and pushes the error suppression of relocated central directories formula based on the number of self-reported entries or size of central directory to consumers.
 
 ## Benchmarks
 
