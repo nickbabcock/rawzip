@@ -33,9 +33,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut total_uncompressed = 0u64;
     let mut total_compressed = 0u64;
     let mut file_count = 0u64;
+    let expected_entries = archive.entries_hint();
 
     let mut entries = archive.entries(&mut buffer);
-    while let Some(entry) = entries.next_entry()? {
+    loop {
+        let entry = match entries.next_entry() {
+            Ok(Some(entry)) => entry,
+            Ok(None) => break,
+            Err(e) => {
+                if file_count == expected_entries {
+                    break;
+                } else {
+                    return Err(e.into());
+                }
+            }
+        };
+
         let uncompressed_size = entry.uncompressed_size_hint();
         let compressed_size = entry.compressed_size_hint();
 
