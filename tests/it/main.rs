@@ -1035,3 +1035,53 @@ fn test_central_directory_offset_consistency() {
         );
     }
 }
+
+#[test]
+fn test_ff_optimized_jar() {
+    // Firefox's omni.ja is an interesting use case where the central directory
+    // is placed at the start of the file. Rawzip can parse this file, but it
+    // requires the end user to do entry bookkeeping, as central directory will
+    // end long before the EOCD is encountered. The test case is a smaller
+    // version of omni.ja: https://taras.glek.net/posts/optimized-zip-format/
+    let data = std::fs::read("assets/omni-mini.ja").unwrap();
+    let archive = ZipArchive::from_slice(&data).unwrap();
+    let mut entries = archive.entries();
+    assert_eq!(archive.entries_hint(), 1);
+    let first = entries.next().unwrap().unwrap();
+    let wayfinder = first.wayfinder();
+    let entry = archive.get_entry(wayfinder).unwrap();
+    assert_eq!(
+        first.compression_method(),
+        rawzip::CompressionMethod::Deflate
+    );
+    let reader = flate2::read::DeflateDecoder::new(entry.data());
+    let mut reader = entry.verifying_reader(reader);
+    let count = std::io::copy(&mut reader, &mut std::io::sink()).unwrap();
+    assert_eq!(first.uncompressed_size_hint(), count);
+
+    // We expect an error, but we provide enough tools for consumers to be able
+    // to swallow this error if they choose when certain conditions are met
+    // (like the number of entries seen are expected).
+    entries.next().unwrap().unwrap_err();
+}
+
+#[test]
+fn test_ff_optimized_jar_reader() {
+    let data = std::fs::File::open("assets/omni-mini.ja").unwrap();
+    let mut buffer = vec![0; rawzip::RECOMMENDED_BUFFER_SIZE];
+    let archive = ZipArchive::from_file(data, &mut buffer).unwrap();
+    let mut entries = archive.entries(&mut buffer);
+    assert_eq!(archive.entries_hint(), 1);
+    let first = entries.next_entry().unwrap().unwrap();
+    let wayfinder = first.wayfinder();
+    let entry = archive.get_entry(wayfinder).unwrap();
+    assert_eq!(
+        first.compression_method(),
+        rawzip::CompressionMethod::Deflate
+    );
+    let reader = flate2::read::DeflateDecoder::new(entry.reader());
+    let mut reader = entry.verifying_reader(reader);
+    let count = std::io::copy(&mut reader, &mut std::io::sink()).unwrap();
+    assert_eq!(first.uncompressed_size_hint(), count);
+    entries.next_entry().unwrap_err();
+}

@@ -60,12 +60,31 @@ fn extract_zip_archive<P: AsRef<std::path::Path>>(
     // Maintain sorted list of compressed data ranges to detect overlaps:
     // https://www.bamsoftware.com/hacks/zipbomb/
     let mut compressed_ranges = Vec::new();
+    let expected_entries = archive.entries_hint();
+    let mut entries_processed = 0u64;
 
     let mut entries = archive.entries(&mut buffer);
-    while let Some(entry) = entries
-        .next_entry()
-        .map_err(|e| ExtractionError::zip_context(e, "Failed to read ZIP entry".to_string()))?
-    {
+    loop {
+        let entry = match entries.next_entry() {
+            Ok(Some(entry)) => entry,
+            Ok(None) => break,
+            Err(e) => {
+                // When an error is encountered, if we have processed the
+                // expected number of entries, we treat this as reaching the end
+                // rather than an error. For the vast majority of zips, this is
+                // not necessary but is included for completeness.
+                if entries_processed == expected_entries {
+                    break;
+                } else {
+                    return Err(ExtractionError::zip_context(
+                        e,
+                        "Failed to read ZIP entry".to_string(),
+                    ));
+                }
+            }
+        };
+
+        entries_processed += 1;
         let raw_path = entry.file_path();
 
         // Avoid zip slips by normalizing the path. Note that it is not required for
