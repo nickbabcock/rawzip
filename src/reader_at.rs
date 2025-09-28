@@ -91,10 +91,12 @@ impl<T: ReaderAt> ReaderAtExt for T {
 }
 
 #[cfg(not(any(unix, windows)))]
+#[derive(Debug)]
 pub struct FileReader(MutexReader<std::fs::File>);
 
 /// A file wrapper that implements [`ReaderAt`] across platforms.
 #[cfg(any(unix, windows))]
+#[derive(Debug)]
 pub struct FileReader(std::fs::File);
 
 impl FileReader {
@@ -364,7 +366,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::{Cursor, Read};
+    use std::io::Cursor;
 
     const TEST_DATA: &[u8] = b"Hello, World! This is test data for ReaderAt implementations.";
 

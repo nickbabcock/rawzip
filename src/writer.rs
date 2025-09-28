@@ -1193,8 +1193,8 @@ struct ZipEntryOptions {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{ErrorKind, ZipArchive};
-    use std::io::{Cursor, Write};
+    use crate::ZipArchive;
+    use std::io::Cursor;
 
     #[test]
     fn test_name_lifetime_independence() {

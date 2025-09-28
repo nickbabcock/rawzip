@@ -26,6 +26,7 @@ const END_OF_CENTRAL_DIR_MAX_OFFSET: u64 = 1 << 20;
 /// causing the zip locator to fail to parse. One can reparse the data starting
 /// from the false EOCD offset using the reported offset
 /// [`Error::eocd_offset()`]
+#[derive(Debug)]
 pub struct ZipLocator {
     max_search_space: u64,
 }
