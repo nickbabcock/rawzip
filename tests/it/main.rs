@@ -824,7 +824,7 @@ fn zip_integration_tests_vec() {
     let data = std::fs::read("assets/zip64.zip").unwrap();
     let archive = rawzip::ZipArchive::from_slice(data).unwrap();
     assert_eq!(archive.comment().as_bytes(), b"");
-    let reader = archive.into_zip_archive();
+    let reader = ZipArchive::from(archive);
     let mut buf = vec![0u8; rawzip::RECOMMENDED_BUFFER_SIZE];
     let mut entries = reader.entries(&mut buf);
     let mut count = 0;
