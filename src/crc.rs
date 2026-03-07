@@ -42,36 +42,55 @@ static CRC_TABLE: [[u32; 256]; 16] = gen_crc_table();
 /// held entirely in memory. When decompressing, a
 /// [`ZipVerifier`](crate::ZipVerifier) is suitable to streaming computations.
 ///
-/// Benchmarks showed that function should be fast enough for all uses, only
-/// losing to `crc32fast` at the largest payload size and even then eking out a
-/// single digit performance improvement.
+/// While this crc implementation is the fastest known on Wasm, it falls a bit
+/// short on native platforms. In a benchmark, using hardware intrinsics like
+/// `PCLMULQDQ` saw 15 GB/s while the current slicing by 16 approach is "only" 5
+/// GB/s.
+///
+/// Unfortunately, adopting `PCLMULQDQ` would require unsafe usage or a
+/// dependency (`crc32fast`) as LLVM is unable to recognize the pattern.
+///
+/// The good news is that if a faster CRC algorithm is needed, then one can
+/// always bring your own CRC implementation with
+/// [`crate::ZipReader::claim_verifier`].
 pub fn crc32(data: &[u8]) -> u32 {
     crc32_chunk(data, 0)
 }
 
+#[inline(always)]
+fn crc32_slice16(data: &[u8], crc: u32) -> u32 {
+    let w0 = u32::from_le_bytes([data[0], data[1], data[2], data[3]]) ^ crc;
+    CRC_TABLE[0x0][data[0xf] as usize]
+        ^ CRC_TABLE[0x1][data[0xe] as usize]
+        ^ CRC_TABLE[0x2][data[0xd] as usize]
+        ^ CRC_TABLE[0x3][data[0xc] as usize]
+        ^ CRC_TABLE[0x4][data[0xb] as usize]
+        ^ CRC_TABLE[0x5][data[0xa] as usize]
+        ^ CRC_TABLE[0x6][data[0x9] as usize]
+        ^ CRC_TABLE[0x7][data[0x8] as usize]
+        ^ CRC_TABLE[0x8][data[0x7] as usize]
+        ^ CRC_TABLE[0x9][data[0x6] as usize]
+        ^ CRC_TABLE[0xa][data[0x5] as usize]
+        ^ CRC_TABLE[0xb][data[0x4] as usize]
+        ^ CRC_TABLE[0xc][(w0 >> 24) as usize]
+        ^ CRC_TABLE[0xd][((w0 >> 16) & 0xFF) as usize]
+        ^ CRC_TABLE[0xe][((w0 >> 8) & 0xFF) as usize]
+        ^ CRC_TABLE[0xf][(w0 & 0xFF) as usize]
+}
+
 #[inline]
 pub fn crc32_chunk(data: &[u8], prev: u32) -> u32 {
-    let mut chunks = data.chunks_exact(16);
-    let mut crc = chunks.by_ref().fold(!prev, |crc, data| {
-        CRC_TABLE[0x0][data[0xf] as usize]
-            ^ CRC_TABLE[0x1][data[0xe] as usize]
-            ^ CRC_TABLE[0x2][data[0xd] as usize]
-            ^ CRC_TABLE[0x3][data[0xc] as usize]
-            ^ CRC_TABLE[0x4][data[0xb] as usize]
-            ^ CRC_TABLE[0x5][data[0xa] as usize]
-            ^ CRC_TABLE[0x6][data[0x9] as usize]
-            ^ CRC_TABLE[0x7][data[0x8] as usize]
-            ^ CRC_TABLE[0x8][data[0x7] as usize]
-            ^ CRC_TABLE[0x9][data[0x6] as usize]
-            ^ CRC_TABLE[0xa][data[0x5] as usize]
-            ^ CRC_TABLE[0xb][data[0x4] as usize]
-            ^ CRC_TABLE[0xc][data[0x3] as usize ^ ((crc >> 0x18) & 0xFF) as usize]
-            ^ CRC_TABLE[0xd][data[0x2] as usize ^ ((crc >> 0x10) & 0xFF) as usize]
-            ^ CRC_TABLE[0xe][data[0x1] as usize ^ ((crc >> 0x08) & 0xFF) as usize]
-            ^ CRC_TABLE[0xf][data[0x0] as usize ^ (crc & 0xFF) as usize]
+    let mut chunks32 = data.chunks_exact(32);
+    let mut crc = chunks32.by_ref().fold(!prev, |crc, data| {
+        let crc = crc32_slice16(data, crc);
+        crc32_slice16(&data[16..], crc)
     });
 
-    crc = chunks.remainder().iter().fold(crc, |crc, &x| {
+    let mut chunks16 = chunks32.remainder().chunks_exact(16);
+    crc = chunks16
+        .by_ref()
+        .fold(crc, |crc, data| crc32_slice16(data, crc));
+    crc = chunks16.remainder().iter().fold(crc, |crc, &x| {
         (crc >> 8) ^ CRC_TABLE[0][(u32::from(x) ^ (crc & 0xFF)) as usize]
     });
 
@@ -93,5 +112,37 @@ mod tests {
 
         let abc = b"EU4txt\nchecksum=\"ced5411e2d4a5ec724595c2c4f1b7347\"";
         assert_eq!(crc32(abc), 1702863696);
+    }
+
+    fn reference_crc32(data: &[u8]) -> u32 {
+        let mut crc = !0u32;
+        for &b in data {
+            crc = (crc >> 8) ^ CRC_TABLE[0][((crc ^ u32::from(b)) & 0xFF) as usize];
+        }
+        !crc
+    }
+
+    #[test]
+    fn test_crc_sizes() {
+        let data: Vec<u8> = (0u8..=255).cycle().take(65536).collect();
+        for &size in &[
+            0, 1, 4, 15, 16, 17, 31, 32, 33, 64, 256, 1024, 4096, 16384, 65536,
+        ] {
+            let slice = &data[..size];
+            assert_eq!(
+                crc32(slice),
+                reference_crc32(slice),
+                "mismatch at size {size}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_crc_chunk_streaming() {
+        let data: Vec<u8> = (0u8..=255).cycle().take(4096).collect();
+        let full = crc32(&data);
+        let half = crc32_chunk(&data[..2048], 0);
+        let streamed = crc32_chunk(&data[2048..], half);
+        assert_eq!(full, streamed);
     }
 }
