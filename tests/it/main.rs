@@ -1116,3 +1116,37 @@ fn test_ff_optimized_jar_reader() {
     assert_eq!(first.uncompressed_size_hint(), count);
     entries.next_entry().unwrap_err();
 }
+
+#[test]
+fn test_custom_crc_reader() {
+    // Tests that consumers can "bring their own CRC" if they want
+    let f = File::open("assets/test.zip").unwrap();
+    let mut buf = vec![0u8; rawzip::RECOMMENDED_BUFFER_SIZE];
+    let archive = ZipArchive::from_file(f, &mut buf).unwrap();
+    let mut entries = archive.entries(&mut buf);
+    let entry = entries.next_entry().unwrap().unwrap();
+    assert_eq!(
+        entry.compression_method(),
+        rawzip::CompressionMethod::Deflate
+    );
+    let wayfinder = entry.wayfinder();
+    let ent = archive.get_entry(wayfinder).unwrap();
+    let zip_reader = ent.reader();
+    let decoder = flate2::read::DeflateDecoder::new(zip_reader);
+
+    let mut reader = flate2::CrcReader::new(decoder);
+    std::io::copy(&mut reader, &mut std::io::sink()).unwrap();
+
+    let actual_crc = reader.crc().sum();
+    let size = reader.get_ref().total_out();
+    let zip_reader = reader.into_inner().into_inner();
+    let verification = zip_reader.claim_verifier().unwrap();
+    assert_ne!(actual_crc, 0, "CRC should not be zero");
+    assert_eq!(verification.crc(), actual_crc);
+    verification
+        .valid(rawzip::ZipVerification {
+            crc: actual_crc,
+            uncompressed_size: size,
+        })
+        .unwrap();
+}
