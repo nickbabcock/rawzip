@@ -818,6 +818,65 @@ fn errors_eq(a: &Error, b: &ErrorKind) -> bool {
     }
 }
 
+#[test]
+fn catch_incorrect_crc_without_data_descriptor() {
+    let mut data = std::fs::read("assets/crc32-not-streamed.zip").unwrap();
+
+    let archive = ZipArchive::from_slice(data.as_slice()).unwrap();
+    let mut entries = archive.entries();
+    let entry = entries.next_entry().unwrap().unwrap();
+    assert!(!entry.has_data_descriptor());
+
+    // Mutate the central directory CRC to be incorrect
+    let crc_offset = entry.central_directory_offset() as usize + 16;
+    let original_crc = u32::from_le_bytes(data[crc_offset..crc_offset + 4].try_into().unwrap());
+    let corrupted_crc = original_crc ^ 0xffff_ffff;
+    data[crc_offset..crc_offset + 4].copy_from_slice(&corrupted_crc.to_le_bytes());
+
+    // Ensure that the slice verifier rejects the bad CRC
+    let archive = ZipArchive::from_slice(data.as_slice()).unwrap();
+    let mut entries = archive.entries();
+    let entry = entries.next_entry().unwrap().unwrap();
+    let ent = archive.get_entry(entry.wayfinder()).unwrap();
+
+    let mut verifier = ent.verifying_reader(ent.data());
+    let slice_result = std::io::copy(&mut verifier, &mut std::io::sink());
+
+    let err = slice_result.unwrap_err();
+    assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
+    let source = err.into_inner().unwrap();
+    let zip_error = source.downcast::<rawzip::Error>().unwrap();
+    match zip_error.kind() {
+        ErrorKind::InvalidChecksum { expected, actual } => {
+            assert_eq!(*expected, corrupted_crc);
+            assert_eq!(*actual, original_crc);
+        }
+        other => panic!("expected InvalidChecksum error, got {:?}", other),
+    }
+
+    // Ensure that the reader verifier rejects the bad CRC
+    let mut buffer = vec![0u8; rawzip::RECOMMENDED_BUFFER_SIZE];
+    let archive = ZipArchive::from_seekable(Cursor::new(data), &mut buffer).unwrap();
+    let mut entries = archive.entries(&mut buffer);
+    let entry = entries.next_entry().unwrap().unwrap();
+    let ent = archive.get_entry(entry.wayfinder()).unwrap();
+
+    let mut verifier = ent.verifying_reader(ent.reader());
+    let reader_result = std::io::copy(&mut verifier, &mut std::io::sink());
+
+    let err = reader_result.unwrap_err();
+    assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
+    let source = err.into_inner().unwrap();
+    let zip_error = source.downcast::<rawzip::Error>().unwrap();
+    match zip_error.kind() {
+        ErrorKind::InvalidChecksum { expected, actual } => {
+            assert_eq!(*expected, corrupted_crc);
+            assert_eq!(*actual, original_crc);
+        }
+        other => panic!("expected InvalidChecksum error, got {:?}", other),
+    }
+}
+
 /// This test is to ensure that the ZipArchive can be created from a Vec<u8>
 #[test]
 fn zip_integration_tests_vec() {
