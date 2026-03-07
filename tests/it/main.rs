@@ -1150,3 +1150,68 @@ fn test_custom_crc_reader() {
         })
         .unwrap();
 }
+
+#[test]
+fn test_custom_verifier() {
+    struct CustomZipVerifier<R> {
+        reader: flate2::CrcReader<rawzip::ZipReader<R>>,
+        size: u64,
+        verified: bool,
+    }
+
+    impl<R> CustomZipVerifier<R>
+    where
+        R: rawzip::ReaderAt,
+    {
+        fn new(reader: rawzip::ZipReader<R>) -> Self {
+            Self {
+                reader: flate2::CrcReader::new(reader),
+                size: 0,
+                verified: false,
+            }
+        }
+    }
+
+    impl<R> Read for CustomZipVerifier<R>
+    where
+        R: rawzip::ReaderAt,
+    {
+        fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+            let read = self.reader.read(buf)?;
+            self.size += read as u64;
+
+            if read == 0 && !self.verified {
+                let expected = self
+                    .reader
+                    .get_ref()
+                    .claim_verifier()
+                    .map_err(|err| std::io::Error::new(std::io::ErrorKind::InvalidData, err))?;
+
+                expected
+                    .valid(rawzip::ZipVerification {
+                        crc: self.reader.crc().sum(),
+                        uncompressed_size: self.size,
+                    })
+                    .map_err(|err| std::io::Error::new(std::io::ErrorKind::InvalidData, err))?;
+
+                self.verified = true;
+            }
+
+            Ok(read)
+        }
+    }
+
+    let f = File::open("assets/go-with-datadesc-sig.zip").unwrap();
+    let mut buf = vec![0u8; rawzip::RECOMMENDED_BUFFER_SIZE];
+    let archive = ZipArchive::from_file(f, &mut buf).unwrap();
+    let mut entries = archive.entries(&mut buf);
+    let entry = entries.next_entry().unwrap().unwrap();
+    let expected_size = entry.uncompressed_size_hint();
+
+    let ent = archive.get_entry(entry.wayfinder()).unwrap();
+    let mut reader = CustomZipVerifier::new(ent.reader());
+    let count = std::io::copy(&mut reader, &mut std::io::sink()).unwrap();
+
+    assert_eq!(count, expected_size);
+    assert!(reader.verified, "custom verifier should validate on EOF");
+}
