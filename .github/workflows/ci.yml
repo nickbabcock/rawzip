@@ -90,10 +90,12 @@ jobs:
       uses: dtolnay/rust-toolchain@master
       with:
         toolchain: stable
-    - name: Build benchmark
-      run: cargo bench --manifest-path bench/Cargo.toml -- --test
-    - name: Build benchmark
-      run: cargo bench --manifest-path compare/Cargo.toml -- --test
+    - name: Build Criterion benchmark
+      run: cargo bench --manifest-path bench/Cargo.toml --bench rawzip-bench-criterion --no-run
+    - name: Build Gungraun benchmark
+      run: cargo bench --manifest-path bench/Cargo.toml --bench rawzip-bench-gungraun --no-run
+    - name: Build comparison benchmark
+      run: cargo bench --manifest-path compare/Cargo.toml --no-run
 
   # Check that all files are formatted properly.
   rustfmt:
