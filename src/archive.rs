@@ -849,17 +849,17 @@ where
             let crc = if self.wayfinder.has_data_descriptor {
                 DataDescriptor::read_at(&self.archive, self.end_offset).map(|x| x.crc)
             } else {
-                Ok(self.crc)
+                Ok(self.wayfinder.crc)
             };
 
             crc.and_then(|crc| {
                 let expected = ZipVerification {
-                    crc: self.crc,
+                    crc,
                     uncompressed_size: self.wayfinder.uncompressed_size_hint(),
                 };
 
                 expected.valid(ZipVerification {
-                    crc,
+                    crc: self.crc,
                     uncompressed_size: self.size,
                 })
             })
