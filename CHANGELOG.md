@@ -1,3 +1,7 @@
+## v0.4.4 - March 9th, 2026
+
+- Fix reader-backed `verifying_reader` CRC validation for entries without a data descriptor so corrupted data is rejected when the CRC comes from the central directory
+
 ## v0.4.3 - December 22nd, 2025
 
 - Update ZipSliceArchive to prefer impl-side `AsRef<[u8]>` constraint
