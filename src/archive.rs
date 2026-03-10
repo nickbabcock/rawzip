@@ -884,15 +884,15 @@ where
     /// Returns an object that can be used to verify the size and checksum of
     /// inflated data
     ///
-    /// Consumes the reader, so this should be called after all data has been read from the entry.
-    ///
-    /// The function will read the data descriptor if one is expected to exist.
-    pub fn claim_verifier(self) -> Result<ZipVerification, Error> {
+    /// The function will read the data descriptor if one is expected to exist
+    /// at the end of the file data. To make the most efficient use of IO, this
+    /// function should be called after reading all the file data.
+    pub fn claim_verifier(&self) -> Result<ZipVerification, Error> {
         let expected_size = self.entry.uncompressed_size_hint();
 
         let expected_crc = if self.entry.has_data_descriptor {
             let end_offset = self.range_reader.end_offset();
-            let archive = self.range_reader.into_inner();
+            let archive = self.range_reader.get_ref();
             DataDescriptor::read_at(archive, end_offset).map(|x| x.crc)?
         } else {
             self.entry.crc
