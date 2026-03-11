@@ -1661,6 +1661,12 @@ impl<'a> ZipFileHeaderRecord<'a> {
     pub fn extra_fields(&self) -> ExtraFields<'_> {
         ExtraFields::new(self.extra_field)
     }
+
+    /// Returns the file entry's comment.
+    #[inline]
+    pub fn comment(&self) -> ZipStr<'_> {
+        self.file_comment
+    }
 }
 
 /// Contains directions to where the Zip entry's data is located within the Zip archive.

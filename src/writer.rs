@@ -116,6 +116,8 @@ impl ZipArchiveWriterBuilder {
             writer: CountWriter::new(writer, self.count),
             files: Vec::with_capacity(self.capacity),
             file_names: Vec::new(),
+            file_comments: Vec::new(),
+            archive_comment: Vec::new(),
         }
     }
 }
@@ -150,6 +152,8 @@ impl ZipArchiveWriterBuilder {
 pub struct ZipArchiveWriter<W> {
     files: Vec<FileHeader>,
     file_names: Vec<u8>,
+    file_comments: Vec<u8>,
+    archive_comment: Vec<u8>,
     writer: CountWriter<W>,
 }
 
@@ -164,6 +168,24 @@ impl<W> ZipArchiveWriter<W> {
     /// Creates a new `ZipArchiveWriter` that writes to `writer`.
     pub fn new(writer: W) -> Self {
         ZipArchiveWriterBuilder::new().build(writer)
+    }
+
+    /// Sets the archive-level comment.
+    ///
+    /// The comment is written at the end of the archive in the End of Central
+    /// Directory record. It can be retrieved when reading the archive via
+    /// [`ZipSliceArchive::comment`](crate::ZipSliceArchive::comment) or
+    /// [`ZipArchive::comment`](crate::ZipArchive::comment).
+    ///
+    /// Returns an error if the comment exceeds 65,535 bytes.
+    pub fn set_comment(&mut self, comment: &[u8]) -> Result<(), Error> {
+        if comment.len() > u16::MAX as usize {
+            return Err(Error::from(ErrorKind::InvalidInput {
+                msg: "archive comment too long".to_string(),
+            }));
+        }
+        self.archive_comment = comment.to_vec();
+        Ok(())
     }
 
     /// Returns the current offset in the output stream.
@@ -253,6 +275,7 @@ pub struct ZipFileBuilder<'archive, 'name, W> {
     unix_permissions: Option<u32>,
     extra_fields: ExtraFieldsContainer,
     crc32_option: Crc32Option,
+    file_comment: Vec<u8>,
 }
 
 impl<'archive, W> ZipFileBuilder<'archive, '_, W>
@@ -409,6 +432,22 @@ where
         self
     }
 
+    /// Sets a comment for this file entry.
+    ///
+    /// The comment is stored in the central directory and can be retrieved
+    /// when reading the archive via [`ZipFileHeaderRecord::comment`](crate::ZipFileHeaderRecord::comment).
+    ///
+    /// Returns an error if the comment exceeds 65,535 bytes.
+    pub fn comment(mut self, comment: &[u8]) -> Result<Self, Error> {
+        if comment.len() > u16::MAX as usize {
+            return Err(Error::from(ErrorKind::InvalidInput {
+                msg: "file comment too long".to_string(),
+            }));
+        }
+        self.file_comment = comment.to_vec();
+        Ok(self)
+    }
+
     /// Creates the file entry and returns a writer for the file's content.
     #[deprecated(
         since = "0.4.0",
@@ -462,6 +501,7 @@ where
             modification_time: self.modification_time,
             unix_permissions: self.unix_permissions,
             extra_fields: self.extra_fields,
+            file_comment: self.file_comment,
         };
         let entry_writer = self.archive.new_file_with_options(self.name, options)?;
 
@@ -479,6 +519,7 @@ pub struct ZipDirBuilder<'a, W> {
     modification_time: Option<UtcDateTime>,
     unix_permissions: Option<u32>,
     extra_fields: ExtraFieldsContainer,
+    file_comment: Vec<u8>,
 }
 
 impl<W> ZipDirBuilder<'_, W>
@@ -519,6 +560,19 @@ where
         Ok(self)
     }
 
+    /// Sets a comment for this directory entry.
+    ///
+    /// See [`ZipFileBuilder::comment`] for details.
+    pub fn comment(mut self, comment: &[u8]) -> Result<Self, Error> {
+        if comment.len() > u16::MAX as usize {
+            return Err(Error::from(ErrorKind::InvalidInput {
+                msg: "file comment too long".to_string(),
+            }));
+        }
+        self.file_comment = comment.to_vec();
+        Ok(self)
+    }
+
     /// Creates the directory entry.
     pub fn create(self) -> Result<(), Error> {
         let options = ZipEntryOptions {
@@ -526,6 +580,7 @@ where
             modification_time: self.modification_time,
             unix_permissions: self.unix_permissions,
             extra_fields: self.extra_fields,
+            file_comment: self.file_comment,
         };
         self.archive.new_dir_with_options(self.name, options)
     }
@@ -607,6 +662,7 @@ where
             modification_time: None,
             unix_permissions: None,
             extra_fields: ExtraFieldsContainer::new(),
+            file_comment: Vec::new(),
         }
     }
 
@@ -646,8 +702,12 @@ where
 
         self.write_local_header(&file_path, flags, CompressionMethod::Store, &mut options)?;
 
+        let file_comment_len = options.file_comment.len() as u16;
+        self.file_comments.extend_from_slice(&options.file_comment);
+
         let file_header = FileHeader {
             name_len,
+            file_comment_len,
             compression_method: CompressionMethod::Store,
             local_header_offset,
             compressed_size: 0,
@@ -691,6 +751,7 @@ where
             unix_permissions: None,
             extra_fields: ExtraFieldsContainer::new(),
             crc32_option: Crc32Option::default(),
+            file_comment: Vec::new(),
         }
     }
 
@@ -723,10 +784,14 @@ where
 
         self.write_local_header(&file_path, flags, options.compression_method, &mut options)?;
 
+        let file_comment_len = options.file_comment.len() as u16;
+        self.file_comments.extend_from_slice(&options.file_comment);
+
         Ok(ZipEntryWriter {
             inner: self,
             compressed_bytes: 0,
             name_len,
+            file_comment_len,
             local_header_offset,
             compression_method: options.compression_method,
             flags,
@@ -753,6 +818,7 @@ where
             || self.files.iter().any(|f| f.needs_zip64());
 
         let mut name_offset = 0;
+        let mut comment_offset = 0;
 
         // Write central directory entries
         for file in &self.files {
@@ -786,7 +852,7 @@ where
                 uncompressed_size: file.uncompressed_size.min(ZIP64_THRESHOLD_FILE_SIZE) as u32,
                 file_name_len: file.name_len,
                 extra_field_len: file.extra_fields.central_size,
-                file_comment_len: 0,
+                file_comment_len: file.file_comment_len,
                 disk_number_start: 0,
                 internal_file_attrs: 0,
                 external_file_attrs: file.unix_permissions.map(|x| x << 16).unwrap_or(0),
@@ -804,6 +870,13 @@ where
             // Extra fields
             file.extra_fields
                 .write_extra_fields(&mut self.writer, Header::CENTRAL)?;
+
+            if file.file_comment_len > 0 {
+                let new_comment_offset = comment_offset + file.file_comment_len as usize;
+                self.writer
+                    .write_all(&self.file_comments[comment_offset..new_comment_offset])?;
+                comment_offset = new_comment_offset;
+            }
         }
 
         let central_directory_end = self.writer.count();
@@ -844,8 +917,12 @@ where
         let cd_offset = central_directory_offset.min(ZIP64_THRESHOLD_OFFSET) as u32;
         self.writer.write_all(&cd_offset.to_le_bytes())?;
 
-        // Comment length
-        self.writer.write_all(&0u16.to_le_bytes())?;
+        // Comment length and data
+        let comment_len = self.archive_comment.len() as u16;
+        self.writer.write_all(&comment_len.to_le_bytes())?;
+        if !self.archive_comment.is_empty() {
+            self.writer.write_all(&self.archive_comment)?;
+        }
 
         self.writer.flush()?;
         Ok(self.writer.writer)
@@ -863,6 +940,7 @@ pub struct ZipEntryWriter<'a, W> {
     inner: &'a mut ZipArchiveWriter<W>,
     compressed_bytes: u64,
     name_len: u16,
+    file_comment_len: u16,
     local_header_offset: u64,
     compression_method: CompressionMethod,
     flags: u16,
@@ -927,6 +1005,7 @@ impl<'a, W> ZipEntryWriter<'a, W> {
 
         let mut file_header = FileHeader {
             name_len: self.name_len,
+            file_comment_len: self.file_comment_len,
             compression_method: self.compression_method,
             local_header_offset: self.local_header_offset,
             compressed_size: output.compressed_size,
@@ -1076,6 +1155,7 @@ impl DataDescriptorOutput {
 #[derive(Debug)]
 struct FileHeader {
     name_len: u16,
+    file_comment_len: u16,
     compression_method: CompressionMethod,
     local_header_offset: u64,
     compressed_size: u64,
@@ -1188,6 +1268,7 @@ struct ZipEntryOptions {
     modification_time: Option<UtcDateTime>,
     unix_permissions: Option<u32>,
     extra_fields: ExtraFieldsContainer,
+    file_comment: Vec<u8>,
 }
 
 #[cfg(test)]
@@ -1419,6 +1500,42 @@ mod tests {
 
         entry.finish(descriptor).unwrap();
         archive.finish().unwrap();
+    }
+
+    #[test]
+    fn test_comment_round_trip() {
+        use std::io::Write;
+
+        let file_comment = b"hello file comment";
+        let archive_comment = b"hello archive comment";
+
+        let mut output = Cursor::new(Vec::new());
+        let mut archive = ZipArchiveWriter::new(&mut output);
+        archive.set_comment(archive_comment).unwrap();
+
+        let (mut entry, config) = archive
+            .new_file("file.txt")
+            .comment(file_comment)
+            .unwrap()
+            .start()
+            .unwrap();
+        let mut writer = config.wrap(&mut entry);
+        writer.write_all(b"content").unwrap();
+        let (_, desc) = writer.finish().unwrap();
+        entry.finish(desc).unwrap();
+
+        archive.finish().unwrap();
+
+        let data = output.into_inner();
+        let archive = ZipArchive::from_slice(&data).unwrap();
+
+        // Verify archive comment
+        assert_eq!(archive.comment().as_bytes(), archive_comment);
+
+        // Verify file entry comment
+        let mut entries = archive.entries();
+        let entry = entries.next_entry().unwrap().unwrap();
+        assert_eq!(entry.comment().as_bytes(), file_comment);
     }
 
     #[test]
