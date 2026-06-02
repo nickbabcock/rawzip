@@ -10,6 +10,8 @@ In its current state, rawzip should not be considered a general purpose Zip libr
 
 - **Bring your own dependencies**: Rawzip pushes the compression responsibility onto the caller. Rust has a myriad of high quality compression libraries to choose from. For instance, just deflate has a half dozen implementations ([#1](https://crates.io/crates/libdeflater), [#2](https://crates.io/crates/miniz_oxide), [#3](https://crates.io/crates/zune-inflate), [#4](https://crates.io/crates/libz-ng-sys), [#5](https://crates.io/crates/zlib-rs), [#6](https://crates.io/crates/cloudflare-zlib-sys)). This allows Rawzip to reach maturity easier and be passively maintained while letting downstream users pick the exact compressor best suited to their needs. The Zip file specification does not change frequently, and the hope is this library won't either.
 
+  The same applies to the CRC: rawzip ships its own (fast) implementation and verifies decompressed data against it by default (see the `verifying_reader` in the example below). But to eke out a bit more performance on platforms that can compute the CRC with hardware intrinsics, you can bring your own and validate it against the archive (see `ZipEntry::claim_verifier`).
+
 ## Features:
 
 - Pure Rust. Zero dependencies. Zero unsafe. Fast.
@@ -93,6 +95,10 @@ std::io::copy(&mut reader, &mut actual)?;
 assert_eq!(&data[..], actual);
 Ok::<(), Box<dyn std::error::Error>>(())
 ```
+
+For a more realistic, security-conscious, bring your own CRC zip file extractor that ties the API together, see the [`extract` example][extract-example] (links to GitHub if reading on docs.rs).
+
+[extract-example]: https://github.com/nickbabcock/rawzip/blob/master/examples/extract.rs
 
 ## Security
 

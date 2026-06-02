@@ -141,7 +141,7 @@ impl<T: AsRef<[u8]>> ZipSliceArchive<T> {
     ///
     /// See [`ZipArchive::get_entry`] for more details. The biggest difference
     /// between the reader and slice APIs is that the slice APIs will eagerly
-    /// validate that the entire compressed data is present.
+    /// validate that the compressed body is present.
     pub fn get_entry(&self, entry: ZipArchiveEntryWayfinder) -> Result<ZipSliceEntry<'_>, Error> {
         let data = self.data.as_ref();
         let header = &data[(entry.local_header_offset as usize).min(data.len())..];
@@ -156,19 +156,19 @@ impl<T: AsRef<[u8]>> ZipSliceArchive<T> {
             return Err(Error::from(ErrorKind::Eof));
         }
 
+        // Split off the data descriptor bytes but don't parse them yet. Parsing
+        // is deferred until the caller resolves the verification handle, so an
+        // mmap-backed slice doesn't fault in the end-of-entry page before the
+        // body has been streamed through.
         let (entire_entry, rest) = header.split_at(total_size as usize);
-
-        let expected_crc = if entry.has_data_descriptor {
-            DataDescriptor::parse(rest)?.crc
-        } else {
-            entry.crc
-        };
 
         Ok(ZipSliceEntry {
             data: entire_entry,
-            verifier: ZipVerification {
-                crc: expected_crc,
+            verification: ZipSliceVerification {
+                descriptor: rest,
+                crc: entry.crc,
                 uncompressed_size: entry.uncompressed_size_hint(),
+                has_data_descriptor: entry.has_data_descriptor,
             },
             local_header_offset: entry.local_header_offset,
             data_start_offset: header_size,
@@ -183,7 +183,7 @@ impl<T: AsRef<[u8]>> ZipSliceArchive<T> {
 pub struct ZipSliceEntry<'a> {
     // From local header offset to end of compressed data
     data: &'a [u8],
-    verifier: ZipVerification,
+    verification: ZipSliceVerification<'a>,
     local_header_offset: u64,
     // self.data[self.data_start_offset] is the start of compressed data
     data_start_offset: u32,
@@ -195,26 +195,33 @@ impl<'a> ZipSliceEntry<'a> {
         &self.data[self.data_start_offset as usize..]
     }
 
-    /// Returns a verifier for the CRC and uncompressed size of the entry.
+    /// Returns a deferred verification handle for CRC + size verification
     ///
-    /// Useful when it's more practical to oneshot decompress the data,
-    /// otherwise use [`ZipSliceEntry::verifying_reader`] to stream
-    /// decompression and verification.
-    pub fn claim_verifier(&self) -> ZipVerification {
-        self.verifier
+    /// See [`ZipReader::claim_verifier`] for how to bring your own CRC
+    /// implementation.
+    pub fn claim_verifier(&self) -> ZipSliceVerification<'a> {
+        self.verification
     }
 
     /// Returns a reader that wraps a decompressor and verify the size and CRC
     /// of the decompressed data once finished.
-    pub fn verifying_reader<D>(&self, reader: D) -> ZipSliceVerifier<D>
+    ///
+    /// Verification runs once the decompressed data reaches the declared
+    /// uncompressed size or the wrapped reader is read to EOF (a `read`
+    /// returning `Ok(0)` on a non-empty buffer), whichever comes first.
+    /// Callers that stop reading before either point can call
+    /// [`ZipSliceVerifier::finish`] to surface the incomplete read as an
+    /// error.
+    pub fn verifying_reader<D>(&self, reader: D) -> ZipSliceVerifier<'a, D>
     where
         D: std::io::Read,
     {
         ZipSliceVerifier {
             reader,
-            verifier: self.verifier,
+            expected: self.claim_verifier(),
             crc: 0,
             size: 0,
+            verified: false,
         }
     }
 
@@ -255,40 +262,133 @@ impl<'a> ZipSliceEntry<'a> {
 }
 
 /// Verifies the wrapped reader returns the expected CRC and uncompressed size
+///
+/// Verification (including the lazy data descriptor parse) runs once, when
+/// the decompressed data reaches the declared uncompressed size or the
+/// wrapped reader hits EOF. See [`ZipSliceEntry::verifying_reader`].
 #[derive(Debug, Clone)]
-pub struct ZipSliceVerifier<D> {
+pub struct ZipSliceVerifier<'a, D> {
     reader: D,
     crc: u32,
     size: u64,
-    verifier: ZipVerification,
+    verified: bool,
+    expected: ZipSliceVerification<'a>,
 }
 
-impl<D> ZipSliceVerifier<D> {
-    /// Consumes the `ZipSliceVerifier`, returning the underlying reader.
+impl<'a, D> ZipSliceVerifier<'a, D> {
+    /// Consumes the `ZipSliceVerifier`, returning the underlying reader without
+    /// running verification.
     pub fn into_inner(self) -> D {
         self.reader
     }
+
+    /// Run verification against the bytes read so far and return the inner
+    /// reader.
+    ///
+    /// Verification triggers automatically once the declared uncompressed
+    /// size is reached or EOF is hit; `finish` is for stopping short of
+    /// both, where it surfaces the incomplete read as an error.
+    pub fn finish(mut self) -> Result<D, Error> {
+        self.verify()?;
+        Ok(self.reader)
+    }
+
+    /// Idempotently validate the accumulated CRC/size against the expected
+    /// values, parsing the data descriptor at most once.
+    fn verify(&mut self) -> Result<(), Error> {
+        if !self.verified {
+            self.expected.valid(ZipVerification {
+                crc: self.crc,
+                uncompressed_size: self.size,
+            })?;
+            self.verified = true;
+        }
+        Ok(())
+    }
 }
 
-impl<D> std::io::Read for ZipSliceVerifier<D>
+impl<'a, D> std::io::Read for ZipSliceVerifier<'a, D>
 where
     D: std::io::Read,
 {
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        // An empty target buffer is not EOF
+        if buf.is_empty() {
+            return Ok(0);
+        }
+
         let read = self.reader.read(buf)?;
         self.crc = crc32_chunk(&buf[..read], self.crc);
         self.size += read as u64;
 
-        if read == 0 || self.size >= self.verifier.size() {
-            self.verifier
-                .valid(ZipVerification {
-                    crc: self.crc,
-                    uncompressed_size: self.size,
-                })
+        // Fail oversized streams
+        if self.size > self.expected.uncompressed_size_hint() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                Error::from(ErrorKind::InvalidSize {
+                    expected: self.expected.uncompressed_size_hint(),
+                    actual: self.size,
+                }),
+            ));
+        }
+
+        // Verify once the declared size is reached or at EOF, whichever comes
+        // first, so callers that stop at the known length still get verified.
+        // At size-reached the entry body has been fully streamed, so the data
+        // descriptor read remains deferred until after the body.
+        if read == 0 || self.size >= self.expected.uncompressed_size_hint() {
+            self.verify()
                 .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
         }
 
         Ok(read)
+    }
+}
+
+/// A deferred verification handle for a [`ZipSliceEntry`].
+///
+/// Constructing the handle performs no parsing. The expected CRC and
+/// uncompressed size are resolved by [`expected`](Self::expected) /
+/// [`valid`](Self::valid), which parse the data descriptor lazily. This lets
+/// callers stream through the entry body before touching the descriptor bytes
+/// that follow it.
+#[derive(Debug, Clone, Copy)]
+pub struct ZipSliceVerification<'a> {
+    descriptor: &'a [u8],
+    crc: u32,
+    uncompressed_size: u64,
+    has_data_descriptor: bool,
+}
+
+impl<'a> ZipSliceVerification<'a> {
+    /// The expected uncompressed size, as recorded in the central directory.
+    ///
+    /// This is the size rawzip validates against.
+    #[inline]
+    pub fn uncompressed_size_hint(&self) -> u64 {
+        self.uncompressed_size
+    }
+
+    /// Resolve the expected CRC and uncompressed size, parsing the data
+    /// descriptor lazily when present.
+    pub fn expected(&self) -> Result<ZipVerification, Error> {
+        let crc = if self.has_data_descriptor {
+            DataDescriptor::parse(self.descriptor)?.crc
+        } else {
+            self.crc
+        };
+
+        Ok(ZipVerification {
+            crc,
+            uncompressed_size: self.uncompressed_size_hint(),
+        })
+    }
+
+    /// Resolve [`expected`](Self::expected) and compare it against the caller's
+    /// actual CRC/size using the standard policy (a CRC of 0 skips the CRC
+    /// check).
+    pub fn valid(&self, actual: ZipVerification) -> Result<(), Error> {
+        self.expected()?.valid(actual)
     }
 }
 
@@ -630,8 +730,86 @@ where
         }
     }
 
+    /// Returns a deferred handle that verifies the claimed size and checksum of
+    /// this entry's inflated data.
+    ///
+    /// Constructing the handle performs no I/O. The data descriptor (when
+    /// present) is read lazily when validation is performed, so resolve it only
+    /// after all of the entry's data has been read.
+    ///
+    /// # Bring your own CRC
+    ///
+    /// Instead of [`verifying_reader`](ZipEntry::verifying_reader), which uses
+    /// rawzip's CRC implementation, you can compute the checksum yourself (for
+    /// example with a SIMD-accelerated CRC) and validate it against the
+    /// archive. Stream the entry through your own CRC reader and, once you hit
+    /// EOF, hand the result to the deferred handle. Cap reads at one byte past
+    /// the declared uncompressed size so a decompression bomb is detected as
+    /// `InvalidSize` after bounded work instead of being decompressed in full
+    /// (capping at exactly the declared size would silently truncate an
+    /// oversized stream rather than detect it):
+    ///
+    /// ```rust
+    /// # use std::io::Read;
+    /// # // Setup: build an in-memory Zip with one deflated entry and resolve
+    /// # // `zip_entry`. This ceremony is elided to keep the focus on the CRC.
+    /// # let mut output = Vec::new();
+    /// # let mut archive = rawzip::ZipArchiveWriter::new(&mut output);
+    /// # let (mut entry, config) = archive
+    /// #     .new_file("file.txt")
+    /// #     .compression_method(rawzip::CompressionMethod::Deflate)
+    /// #     .start()?;
+    /// # let encoder = flate2::write::DeflateEncoder::new(&mut entry, flate2::Compression::default());
+    /// # let mut writer = config.wrap(encoder);
+    /// # std::io::copy(&mut &b"Hello, world!"[..], &mut writer)?;
+    /// # let (_, descriptor) = writer.finish()?;
+    /// # entry.finish(descriptor)?;
+    /// # archive.finish()?;
+    /// # let mut buf = vec![0u8; rawzip::RECOMMENDED_BUFFER_SIZE];
+    /// # let end_offset = output.len() as u64;
+    /// # let archive = rawzip::ZipLocator::new()
+    /// #     .locate_in_reader(output, &mut buf, end_offset)
+    /// #     .map_err(|(_, e)| e)?;
+    /// # let wayfinder = {
+    /// #     let mut entries = archive.entries(&mut buf);
+    /// #     entries.next_entry()?.unwrap().wayfinder()
+    /// # };
+    /// # let zip_entry = archive.get_entry(wayfinder)?;
+    /// // Compute the checksum yourself as the data streams through.
+    /// let verifier = zip_entry.claim_verifier();
+    /// let decompressor = flate2::read::DeflateDecoder::new(zip_entry.reader());
+    /// let mut reader = flate2::CrcReader::new(decompressor)
+    ///     .take(verifier.uncompressed_size_hint().saturating_add(1));
+    /// let uncompressed_size = std::io::copy(&mut reader, &mut std::io::sink())?;
+    ///
+    /// let actual = rawzip::ZipVerification {
+    ///     crc: reader.get_ref().crc().sum(),
+    ///     uncompressed_size,
+    /// };
+    ///
+    /// verifier.valid(actual)?;
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    ///
+    /// Alternatively, one can wrap the decode stream, impl [`Read`] and call
+    /// [`valid`](ZipReaderVerification::valid) at EOF.
+    pub fn claim_verifier(&self) -> ZipReaderVerification<&'archive R> {
+        ZipReaderVerification {
+            archive: self.archive.get_ref(),
+            end_offset: self.body_end_offset,
+            crc: self.entry.crc,
+            uncompressed_size: self.entry.uncompressed_size_hint(),
+            has_data_descriptor: self.entry.has_data_descriptor,
+        }
+    }
+
     /// Returns a reader that wraps a decompressor and verify the size and CRC
     /// of the decompressed data once finished.
+    ///
+    /// Verification runs once the decompressed data reaches the declared
+    /// uncompressed size or the wrapped reader is read to EOF, whichever
+    /// comes first. Callers that stop reading before either point can call
+    /// [`ZipVerifier::finish`] to surface the incomplete read as an error.
     pub fn verifying_reader<D>(&self, reader: D) -> ZipVerifier<D, &'archive R>
     where
         D: std::io::Read,
@@ -640,9 +818,8 @@ where
             reader,
             crc: 0,
             size: 0,
-            archive: self.archive.get_ref(),
-            end_offset: self.body_end_offset,
-            wayfinder: self.entry,
+            verified: false,
+            expected: self.claim_verifier(),
         }
     }
 
@@ -817,53 +994,144 @@ impl ZipVerification {
     }
 }
 
-/// Verifies the checksum of the decompressed data matches the checksum listed in the zip
+/// A deferred verification handle for a [`ZipReader`].
+///
+/// Constructing the handle performs no I/O. The expected CRC and uncompressed
+/// size are resolved by [`expected`](Self::expected) / [`valid`](Self::valid),
+/// which read the data descriptor lazily (a positioned read at the end of the
+/// entry body). Deferring that read until the body has been consumed keeps it
+/// within the page-cache / read-ahead window instead of jumping ahead
+/// mid-stream.
 #[derive(Debug, Clone)]
-pub struct ZipVerifier<Decompressor, ReaderAt> {
+pub struct ZipReaderVerification<R> {
+    archive: R,
+    end_offset: u64,
+    crc: u32,
+    uncompressed_size: u64,
+    has_data_descriptor: bool,
+}
+
+impl<R> ZipReaderVerification<R> {
+    /// The expected uncompressed size, as recorded in the central directory.
+    ///
+    /// This is the size rawzip validates against.
+    #[inline]
+    pub fn uncompressed_size_hint(&self) -> u64 {
+        self.uncompressed_size
+    }
+}
+
+impl<R> ZipReaderVerification<R>
+where
+    R: ReaderAt,
+{
+    /// Resolve the expected CRC and uncompressed size, reading the data
+    /// descriptor lazily when present.
+    pub fn expected(&self) -> Result<ZipVerification, Error> {
+        let crc = if self.has_data_descriptor {
+            DataDescriptor::read_at(&self.archive, self.end_offset)?.crc
+        } else {
+            self.crc
+        };
+
+        Ok(ZipVerification {
+            crc,
+            uncompressed_size: self.uncompressed_size_hint(),
+        })
+    }
+
+    /// Resolve [`expected`](Self::expected) and compare it against the caller's
+    /// actual CRC/size using the standard policy (a CRC of 0 skips the CRC
+    /// check).
+    pub fn valid(&self, actual: ZipVerification) -> Result<(), Error> {
+        self.expected()?.valid(actual)
+    }
+}
+
+/// Verifies the checksum of the decompressed data matches the checksum listed in the zip
+///
+/// Verification (including the lazy data descriptor read) runs once, when the
+/// decompressed data reaches the declared uncompressed size or the wrapped
+/// reader hits EOF. See [`ZipEntry::verifying_reader`].
+#[derive(Debug, Clone)]
+pub struct ZipVerifier<Decompressor, R> {
     reader: Decompressor,
     crc: u32,
     size: u64,
-    archive: ReaderAt,
-    end_offset: u64,
-    wayfinder: ZipArchiveEntryWayfinder,
+    verified: bool,
+    expected: ZipReaderVerification<R>,
 }
 
-impl<Decompressor, ReaderAt> ZipVerifier<Decompressor, ReaderAt> {
-    /// Consumes the [`ZipVerifier`], returning the underlying decompressor.
+impl<Decompressor, R> ZipVerifier<Decompressor, R> {
+    /// Consumes the [`ZipVerifier`], returning the underlying decompressor
+    /// without running verification.
     pub fn into_inner(self) -> Decompressor {
         self.reader
     }
 }
 
-impl<Decompressor, Reader> std::io::Read for ZipVerifier<Decompressor, Reader>
+impl<Decompressor, R> ZipVerifier<Decompressor, R>
+where
+    R: ReaderAt,
+{
+    /// Run verification against the bytes read so far and return the inner
+    /// decompressor.
+    ///
+    /// Verification triggers automatically once the declared uncompressed
+    /// size is reached or EOF is hit; `finish` is for stopping short of
+    /// both, where it surfaces the incomplete read as an error.
+    pub fn finish(mut self) -> Result<Decompressor, Error> {
+        self.verify()?;
+        Ok(self.reader)
+    }
+
+    /// Idempotently validate the accumulated CRC/size against the expected
+    /// values, reading the data descriptor at most once.
+    fn verify(&mut self) -> Result<(), Error> {
+        if !self.verified {
+            self.expected.valid(ZipVerification {
+                crc: self.crc,
+                uncompressed_size: self.size,
+            })?;
+            self.verified = true;
+        }
+        Ok(())
+    }
+}
+
+impl<Decompressor, R> std::io::Read for ZipVerifier<Decompressor, R>
 where
     Decompressor: std::io::Read,
-    Reader: ReaderAt,
+    R: ReaderAt,
 {
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        // An empty target buffer is not EOF
+        if buf.is_empty() {
+            return Ok(0);
+        }
+
         let read = self.reader.read(buf)?;
         self.crc = crc32_chunk(&buf[..read], self.crc);
         self.size += read as u64;
 
-        if read == 0 || self.size >= self.wayfinder.uncompressed_size_hint() {
-            let crc = if self.wayfinder.has_data_descriptor {
-                DataDescriptor::read_at(&self.archive, self.end_offset).map(|x| x.crc)
-            } else {
-                Ok(self.wayfinder.crc)
-            };
+        // Fail oversized streams
+        if self.size > self.expected.uncompressed_size_hint() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                Error::from(ErrorKind::InvalidSize {
+                    expected: self.expected.uncompressed_size_hint(),
+                    actual: self.size,
+                }),
+            ));
+        }
 
-            crc.and_then(|crc| {
-                let expected = ZipVerification {
-                    crc,
-                    uncompressed_size: self.wayfinder.uncompressed_size_hint(),
-                };
-
-                expected.valid(ZipVerification {
-                    crc: self.crc,
-                    uncompressed_size: self.size,
-                })
-            })
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+        // Verify once the declared size is reached or at EOF, whichever comes
+        // first, so callers that stop at the known length still get verified.
+        // At size-reached the entry body has been fully streamed, so the data
+        // descriptor read remains deferred until after the body.
+        if read == 0 || self.size >= self.expected.uncompressed_size_hint() {
+            self.verify()
+                .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
         }
 
         Ok(read)
@@ -881,27 +1149,33 @@ impl<R> ZipReader<R>
 where
     R: ReaderAt,
 {
-    /// Returns an object that can be used to verify the size and checksum of
-    /// inflated data
+    /// Returns a deferred handle that can verify the size and checksum of
+    /// inflated data, recovered from a [`ZipReader`] rather than a [`ZipEntry`].
     ///
-    /// Consumes the reader, so this should be called after all data has been read from the entry.
+    /// This yields the same handle as [`ZipEntry::claim_verifier`] — see there
+    /// for the canonical "bring your own CRC" example and the full set of
+    /// verification styles. Reach for this form when you have consumed the entry
+    /// into a reader stack and no longer hold the originating [`ZipEntry`]: own
+    /// the [`ZipReader`] at the bottom of the stack and call `claim_verifier()`
+    /// transiently at EOF.
     ///
-    /// The function will read the data descriptor if one is expected to exist.
-    pub fn claim_verifier(self) -> Result<ZipVerification, Error> {
-        let expected_size = self.entry.uncompressed_size_hint();
-
-        let expected_crc = if self.entry.has_data_descriptor {
-            let end_offset = self.range_reader.end_offset();
-            let archive = self.range_reader.into_inner();
-            DataDescriptor::read_at(archive, end_offset).map(|x| x.crc)?
-        } else {
-            self.entry.crc
-        };
-
-        Ok(ZipVerification {
-            crc: expected_crc,
-            uncompressed_size: expected_size,
-        })
+    /// When you own the read loop, prefer the capped imperative pattern from
+    /// [`ZipEntry::claim_verifier`]. When a self-verifying [`Read`] must be
+    /// handed to code you don't control, the handle composes into one — see
+    /// the `custom_verifying_reader` integration test for a reference that
+    /// mirrors the policy of
+    /// [`verifying_reader`](ZipEntry::verifying_reader).
+    ///
+    /// The data descriptor (when present) is read lazily, so resolve the handle
+    /// only after all of the entry's data has been read.
+    pub fn claim_verifier(&self) -> ZipReaderVerification<&R> {
+        ZipReaderVerification {
+            archive: self.range_reader.get_ref(),
+            end_offset: self.range_reader.end_offset(),
+            crc: self.entry.crc,
+            uncompressed_size: self.entry.uncompressed_size_hint(),
+            has_data_descriptor: self.entry.has_data_descriptor,
+        }
     }
 }
 

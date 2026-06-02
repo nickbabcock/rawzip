@@ -6,6 +6,8 @@
 //! - Supports only store, deflate, and zstd compression methods
 //! - Supports only UTF-8 file paths
 
+use std::io::{Read, Write};
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<String> = std::env::args().collect();
     if args.len() != 3 {
@@ -183,30 +185,17 @@ fn extract_zip_archive<P: AsRef<std::path::Path>>(
                 format!("Failed to create output file: {}", out_path.display()),
             )
         })?;
+
         let method = entry.compression_method();
-        match method {
+        let result = match method {
             CompressionMethod::Store => {
-                let mut verifier = zip_entry.verifying_reader(reader);
-                std::io::copy(&mut verifier, &mut outfile).map_err(|e| {
-                    ExtractionError::io_context(
-                        e,
-                        format!(
-                            "Failed to extract uncompressed file: {}",
-                            file_path.as_ref()
-                        ),
-                    )
-                })?;
+                extract(reader, &mut outfile, entry.uncompressed_size_hint())
             }
-            CompressionMethod::Deflate => {
-                let inflater = flate2::read::DeflateDecoder::new(reader);
-                let mut verifier = zip_entry.verifying_reader(inflater);
-                std::io::copy(&mut verifier, &mut outfile).map_err(|e| {
-                    ExtractionError::io_context(
-                        e,
-                        format!("Failed to extract deflated file: {}", file_path.as_ref()),
-                    )
-                })?;
-            }
+            CompressionMethod::Deflate => extract(
+                flate2::read::DeflateDecoder::new(reader),
+                &mut outfile,
+                entry.uncompressed_size_hint(),
+            ),
             CompressionMethod::Zstd | CompressionMethod::ZstdDeprecated => {
                 let decoder = zstd::Decoder::new(reader).map_err(|e| {
                     ExtractionError::io_context(
@@ -217,19 +206,33 @@ fn extract_zip_archive<P: AsRef<std::path::Path>>(
                         ),
                     )
                 })?;
-                let mut verifier = zip_entry.verifying_reader(decoder);
-                std::io::copy(&mut verifier, &mut outfile).map_err(|e| {
-                    ExtractionError::io_context(
-                        e,
-                        format!("Failed to extract zstd file: {}", file_path.as_ref()),
-                    )
-                })?;
+                extract(decoder, &mut outfile, entry.uncompressed_size_hint())
             }
             _ => {
                 eprintln!("Unsupported compression method {method:?} for file: {file_path:?}");
                 continue;
             }
-        }
+        };
+
+        let actual = result.map_err(|e| {
+            ExtractionError::io_context(
+                e,
+                format!("Failed to extract file: {}", file_path.as_ref()),
+            )
+        })?;
+
+        // Since we brought our own CRC implementation (instead of using
+        // `verifying_reader`), we need to manually ensure the integrity of the
+        // extracted data.
+        zip_entry.claim_verifier().valid(actual).map_err(|e| {
+            ExtractionError::zip_context(
+                e,
+                format!(
+                    "CRC/size verification failed for file: {}",
+                    file_path.as_ref()
+                ),
+            )
+        })?;
 
         match entry.last_modified() {
             rawzip::time::ZipDateTimeKind::Utc(dt) => {
@@ -334,6 +337,28 @@ fn extract_zip_archive<P: AsRef<std::path::Path>>(
     }
 
     Ok(())
+}
+
+/// Copy the decompressed data into a sink and calculate the verification
+/// payload manually by bringing our own hardware accelerated CRC
+/// implementation.
+///
+/// Reads are capped at one byte past the declared uncompressed size, so a
+/// decompression bomb is written to disk only up to that cap and then surfaces
+/// as an `InvalidSize` error during verification. The cap is `size_hint + 1`
+/// rather than `size_hint`: stopping exactly at the declared size would
+/// silently truncate an oversized stream instead of detecting it.
+fn extract(
+    decompressor: impl Read,
+    mut sink: impl Write,
+    size_hint: u64,
+) -> std::io::Result<rawzip::ZipVerification> {
+    let mut crc_reader = flate2::CrcReader::new(decompressor).take(size_hint.saturating_add(1));
+    let uncompressed_size = std::io::copy(&mut crc_reader, &mut sink)?;
+    Ok(rawzip::ZipVerification {
+        crc: crc_reader.get_ref().crc().sum(),
+        uncompressed_size,
+    })
 }
 
 #[derive(Debug)]
