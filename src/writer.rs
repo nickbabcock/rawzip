@@ -228,6 +228,8 @@ pub enum Crc32Option {
     /// Use a custom CRC32 value and skip calculation.
     Custom(u32),
     /// Skip CRC32 calculation entirely (sets CRC32 to 0).
+    ///
+    /// Verifying readers will reject these entries
     Skip,
 }
 
@@ -399,8 +401,9 @@ where
     /// By default, CRC32 is calculated automatically from the data. Use this
     /// method to:
     ///
-    /// - Skip CRC32 calculation entirely (for performance or when verification
-    ///   isn't desired)
+    /// - Skip CRC32 calculation entirely (stores a CRC of 0; verifying readers
+    ///   will reject non-empty entries, so only suitable for empty entries or
+    ///   when the reader never verifies)
     /// - Provide a pre-calculated CRC32 value
     #[must_use]
     #[inline]
@@ -1364,7 +1367,8 @@ mod tests {
             }
         }
 
-        // Test with skipped CRC - should have CRC of 0, and should validate fine
+        // Test with skipped CRC on non-empty data - stores CRC of 0, which is
+        // not legitimate for a non-empty entry, so verification must fail.
         {
             let mut output = Cursor::new(Vec::new());
             let mut archive = ZipArchiveWriter::new(&mut output);
@@ -1379,7 +1383,48 @@ mod tests {
             entry.finish(descriptor).unwrap();
             archive.finish().unwrap();
 
-            // Verify the archive can be read
+            // Verify the archive fails verification
+            let output = output.into_inner();
+            let archive = ZipArchive::from_slice(&output).unwrap();
+            let mut entries = archive.entries();
+            let entry = entries.next_entry().unwrap().unwrap();
+            let wayfinder = entry.wayfinder();
+            let entry = archive.get_entry(wayfinder).unwrap();
+            let mut verifier = entry.verifying_reader(entry.data());
+            let mut actual = Vec::new();
+            let result = std::io::copy(&mut verifier, &mut actual);
+
+            assert!(result.is_err());
+            let err = result.unwrap_err();
+            assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
+            let source = err.into_inner().unwrap();
+            let zip_error = source.downcast::<crate::Error>().unwrap();
+            match zip_error.kind() {
+                ErrorKind::InvalidChecksum { expected, actual } => {
+                    assert_eq!(*expected, 0);
+                    assert_eq!(*actual, correct_crc);
+                }
+                _ => panic!("Expected InvalidChecksum error, got {:?}", zip_error.kind()),
+            }
+        }
+
+        // Test with skipped CRC on empty data - a zero CRC is legitimate for an
+        // empty entry, so verification should still pass.
+        {
+            let mut output = Cursor::new(Vec::new());
+            let mut archive = ZipArchiveWriter::new(&mut output);
+            let (mut entry, config) = archive
+                .new_file("empty.txt")
+                .crc32(Crc32Option::Skip)
+                .start()
+                .unwrap();
+            let mut writer = config.wrap(&mut entry);
+            writer.write_all(b"").unwrap();
+            let (_, descriptor) = writer.finish().unwrap();
+            entry.finish(descriptor).unwrap();
+            archive.finish().unwrap();
+
+            // Verify the empty archive can be read
             let output = output.into_inner();
             let archive = ZipArchive::from_slice(&output).unwrap();
             let mut entries = archive.entries();
@@ -1389,7 +1434,7 @@ mod tests {
             let mut verifier = entry.verifying_reader(entry.data());
             let mut actual = Vec::new();
             std::io::copy(&mut verifier, &mut actual).unwrap();
-            assert_eq!(&actual, data);
+            assert!(actual.is_empty());
         }
     }
 
