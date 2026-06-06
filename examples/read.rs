@@ -60,6 +60,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let mut verifier = zip_entry.verifying_reader(inflater);
             io::copy(&mut verifier, &mut stdout_lock)?;
         }
+        rawzip::CompressionMethod::Zstd => {
+            let decoder = zstd::Decoder::new(reader)?;
+            let mut verifier = zip_entry.verifying_reader(decoder);
+            io::copy(&mut verifier, &mut stdout_lock)?;
+        }
         _ => {
             eprintln!(
                 "Error: Unsupported compression method: {:?}",
