@@ -13,7 +13,7 @@ fn create_test_zip<const TIMESTAMP: bool>(entries: usize) -> Vec<u8> {
     for i in 0..entries {
         let mut file_builder = archive
             .new_file(names.name_of(i))
-            .compression_method(rawzip::CompressionMethod::Store);
+            .compression_method(rawzip::CompressionMethod::STORE);
         if TIMESTAMP {
             file_builder = file_builder.last_modified(jan_1_2001);
         }

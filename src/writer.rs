@@ -598,7 +598,7 @@ where
     /// Creates the directory entry.
     pub fn create(self) -> Result<(), Error> {
         let options = ZipEntryOptions {
-            compression_method: CompressionMethod::Store, // Directories always use Store
+            compression_method: CompressionMethod::STORE, // Directories always use Store
             modification_time: self.modification_time,
             unix_permissions: self.unix_permissions,
             extra_fields: self.extra_fields,
@@ -643,7 +643,7 @@ where
             signature: ZipLocalFileHeaderFixed::SIGNATURE,
             version_needed: 20,
             flags: EntryFlags::new(flags),
-            compression_method: compression_method.as_id(),
+            compression_method,
             last_mod_time: dos.packed_time(),
             last_mod_date: dos.packed_date(),
             crc32: 0, // must be zero if data descriptor is used (4.4.4)
@@ -729,14 +729,14 @@ where
 
         let file_comment_len = comment_len(&options.file_comment)?;
 
-        self.write_local_header(path_bytes, flags, CompressionMethod::Store, &mut options)?;
+        self.write_local_header(path_bytes, flags, CompressionMethod::STORE, &mut options)?;
 
         self.file_comments.extend_from_slice(&options.file_comment);
 
         let file_header = FileHeader {
             name_len,
             file_comment_len,
-            compression_method: CompressionMethod::Store,
+            compression_method: CompressionMethod::STORE,
             local_header_offset,
             compressed_size: 0,
             uncompressed_size: 0,
@@ -762,7 +762,7 @@ where
     /// # let mut output = Cursor::new(Vec::new());
     /// # let mut archive = rawzip::ZipArchiveWriter::new(&mut output);
     /// let (mut entry, config) = archive.new_file("my-file")
-    ///     .compression_method(rawzip::CompressionMethod::Deflate)
+    ///     .compression_method(rawzip::CompressionMethod::DEFLATE)
     ///     .unix_permissions(0o644)
     ///     .start()?;
     /// let mut writer = config.wrap(&mut entry);
@@ -779,7 +779,7 @@ where
         ZipFileBuilder {
             archive: self,
             path: path.into(),
-            compression_method: CompressionMethod::Store,
+            compression_method: CompressionMethod::STORE,
             modification_time: None,
             unix_permissions: None,
             extra_fields: ExtraFieldsContainer::new(),
@@ -890,7 +890,7 @@ where
                 version_made_by,
                 version_needed,
                 flags: EntryFlags::new(file.flags),
-                compression_method: file.compression_method.as_id(),
+                compression_method: file.compression_method,
                 last_mod_time: dos.packed_time(),
                 last_mod_date: dos.packed_date(),
                 crc32: file.crc,

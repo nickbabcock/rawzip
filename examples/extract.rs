@@ -172,7 +172,7 @@ fn extract_zip_archive<P: AsRef<std::path::Path>>(
         let uncompressed_size = entry.uncompressed_size_hint();
         if compressed_size > 0
             && uncompressed_size / compressed_size > 1032
-            && matches!(entry.compression_method(), CompressionMethod::Deflate)
+            && matches!(entry.compression_method(), CompressionMethod::DEFLATE)
         {
             eprintln!(
                 "Skipped potential zip bomb: compression ratio {:.1}:1 exceeds limit of 1032:1 for file: {file_path:?}",
@@ -189,7 +189,7 @@ fn extract_zip_archive<P: AsRef<std::path::Path>>(
         })?;
         let method = entry.compression_method();
         match method {
-            CompressionMethod::Store => {
+            CompressionMethod::STORE => {
                 let mut verifier = zip_entry.verifying_reader(reader);
                 std::io::copy(&mut verifier, &mut outfile).map_err(|e| {
                     ExtractionError::io_context(
@@ -201,7 +201,7 @@ fn extract_zip_archive<P: AsRef<std::path::Path>>(
                     )
                 })?;
             }
-            CompressionMethod::Deflate => {
+            CompressionMethod::DEFLATE => {
                 let inflater = flate2::read::DeflateDecoder::new(reader);
                 let mut verifier = zip_entry.verifying_reader(inflater);
                 std::io::copy(&mut verifier, &mut outfile).map_err(|e| {
@@ -211,7 +211,7 @@ fn extract_zip_archive<P: AsRef<std::path::Path>>(
                     )
                 })?;
             }
-            CompressionMethod::Zstd | CompressionMethod::ZstdDeprecated => {
+            CompressionMethod::ZSTD | CompressionMethod::ZSTD_DEPRECATED => {
                 let decoder = zstd::Decoder::new(reader).map_err(|e| {
                     ExtractionError::io_context(
                         e,

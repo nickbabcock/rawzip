@@ -170,7 +170,7 @@ fn decrypt_winzip_aes_payload<R: Read>(
 
     let mut output = Vec::new();
     let mut decoder = match compression_method {
-        CompressionMethod::Deflate => flate2::read::DeflateDecoder::new(aes_reader),
+        CompressionMethod::DEFLATE => flate2::read::DeflateDecoder::new(aes_reader),
         method => panic!("unsupported AES compression method: {method:?}"),
     };
     decoder.read_to_end(&mut output).unwrap();
@@ -220,13 +220,13 @@ fn decrypt_winzip_aes_entry(path: &str, expected_strength: u8, expected_vendor_v
         vendor_version: expected_vendor_version,
         vendor_id: *b"AE",
         strength: expected_strength,
-        compression_method: CompressionMethod::Deflate,
+        compression_method: CompressionMethod::DEFLATE,
     };
     let mut entries = archive.entries(&mut buffer);
     let entry = entries.next_entry().unwrap().unwrap();
 
     assert_eq!(entry.file_path().as_ref(), b"test.txt");
-    assert_eq!(entry.compression_method(), CompressionMethod::Aes);
+    assert_eq!(entry.compression_method(), CompressionMethod::AES);
     assert!(entry.flags().is_encrypted());
     assert!(!entry.flags().has_strong_encryption());
 
@@ -320,8 +320,8 @@ fn aes_extra_field(vendor_version: u16, strength: u8, method: CompressionMethod)
     // The actual compression method id (8 for deflate) lives here; the entry's
     // own compression method is 99 (AES).
     let method_id = match method {
-        CompressionMethod::Deflate => 8u16,
-        CompressionMethod::Store => 0u16,
+        CompressionMethod::DEFLATE => 8u16,
+        CompressionMethod::STORE => 0u16,
         other => panic!("unsupported AES compression method: {other:?}"),
     };
     field[5..7].copy_from_slice(&method_id.to_le_bytes());
@@ -354,10 +354,10 @@ fn create_winzip_aes_entry(strength: u8, vendor_version: u16, plaintext: &[u8]) 
     let mut output = std::io::Cursor::new(Vec::new());
     let mut archive = ZipArchiveWriter::new(&mut output);
 
-    let extra = aes_extra_field(vendor_version, strength, CompressionMethod::Deflate);
+    let extra = aes_extra_field(vendor_version, strength, CompressionMethod::DEFLATE);
     let (mut entry, config) = archive
         .new_file("test.txt")
-        .compression_method(CompressionMethod::Aes)
+        .compression_method(CompressionMethod::AES)
         .encrypted(true)
         .extra_field(ExtraFieldId::AES, &extra, Header::default())
         .unwrap()
@@ -410,13 +410,13 @@ fn roundtrip_winzip_aes_entry(strength: u8, vendor_version: u16) {
         vendor_version,
         vendor_id: *b"AE",
         strength,
-        compression_method: CompressionMethod::Deflate,
+        compression_method: CompressionMethod::DEFLATE,
     };
 
     let mut entries = archive.entries(&mut buffer);
     let entry = entries.next_entry().unwrap().unwrap();
     assert_eq!(entry.file_path().as_ref(), b"test.txt");
-    assert_eq!(entry.compression_method(), CompressionMethod::Aes);
+    assert_eq!(entry.compression_method(), CompressionMethod::AES);
     assert!(entry.flags().is_encrypted());
     assert!(!entry.flags().has_strong_encryption());
 
@@ -450,7 +450,7 @@ fn roundtrip_winzip_aes_entry(strength: u8, vendor_version: u16) {
         encrypted_entry.reader(),
         compressed_size,
         strength,
-        CompressionMethod::Deflate,
+        CompressionMethod::DEFLATE,
     );
     assert_eq!(decoded, plaintext);
 }
@@ -503,7 +503,7 @@ fn decrypt_zipcrypto_entry() {
     assert_eq!(entry.file_path().as_ref(), b"test.txt");
     // ZipCrypto leaves the compression method untouched; encryption is signaled
     // by general purpose bit 0, not by a dedicated method like WinZip AES.
-    assert_eq!(entry.compression_method(), CompressionMethod::Deflate);
+    assert_eq!(entry.compression_method(), CompressionMethod::DEFLATE);
     assert!(entry.flags().has_data_descriptor());
     assert!(entry.flags().is_encrypted());
 
@@ -603,7 +603,7 @@ fn create_zipcrypto_entry(method: CompressionMethod, plaintext: &[u8]) -> Vec<u8
     // ZipCrypto -> archive. The encryption header is part of the compressed size,
     // which the entry tracks automatically as the encryptor writes through it.
     let descriptor = match method {
-        CompressionMethod::Deflate => {
+        CompressionMethod::DEFLATE => {
             let deflater =
                 flate2::write::DeflateEncoder::new(encryptor, flate2::Compression::default());
             let mut writer = config.wrap(deflater);
@@ -612,7 +612,7 @@ fn create_zipcrypto_entry(method: CompressionMethod, plaintext: &[u8]) -> Vec<u8
             deflater.finish().unwrap(); // drops the encryptor, releasing &mut entry
             descriptor
         }
-        CompressionMethod::Store => {
+        CompressionMethod::STORE => {
             let mut writer = config.wrap(encryptor);
             writer.write_all(plaintext).unwrap();
             let (_encryptor, descriptor) = writer.finish().unwrap();
@@ -659,14 +659,14 @@ fn roundtrip_zipcrypto(method: CompressionMethod, plaintext: &[u8]) {
 
     let mut output = Vec::new();
     match method {
-        CompressionMethod::Deflate => {
+        CompressionMethod::DEFLATE => {
             let inflater = flate2::read::DeflateDecoder::new(decryptor);
             zip_entry
                 .verifying_reader(inflater)
                 .read_to_end(&mut output)
                 .unwrap();
         }
-        CompressionMethod::Store => {
+        CompressionMethod::STORE => {
             zip_entry
                 .verifying_reader(decryptor)
                 .read_to_end(&mut output)
@@ -682,24 +682,24 @@ fn roundtrip_zipcrypto(method: CompressionMethod, plaintext: &[u8]) {
 #[test]
 fn roundtrip_zipcrypto_deflate() {
     let plaintext = b"the quick brown fox jumps over the lazy dog".repeat(8);
-    roundtrip_zipcrypto(CompressionMethod::Deflate, &plaintext);
+    roundtrip_zipcrypto(CompressionMethod::DEFLATE, &plaintext);
 }
 
 #[test]
 fn roundtrip_zipcrypto_store() {
-    roundtrip_zipcrypto(CompressionMethod::Store, b"aaaaaaaaaaaaaaaa\n");
+    roundtrip_zipcrypto(CompressionMethod::STORE, b"aaaaaaaaaaaaaaaa\n");
 }
 
 #[test]
 fn roundtrip_zipcrypto_empty() {
-    roundtrip_zipcrypto(CompressionMethod::Deflate, b"");
+    roundtrip_zipcrypto(CompressionMethod::DEFLATE, b"");
 }
 
 /// Decoding rawzip's own ZipCrypto output with the wrong password must fail.
 #[test]
 fn roundtrip_zipcrypto_wrong_password_fails() {
     let plaintext = b"the quick brown fox".repeat(8);
-    let zip = create_zipcrypto_entry(CompressionMethod::Deflate, &plaintext);
+    let zip = create_zipcrypto_entry(CompressionMethod::DEFLATE, &plaintext);
 
     let mut buffer = vec![0u8; RECOMMENDED_BUFFER_SIZE];
     let archive = ZipLocator::new()
@@ -734,7 +734,7 @@ fn decrypt_zipcrypto_no_data_descriptor_entry() {
     let entry = entries.next_entry().unwrap().unwrap();
 
     assert_eq!(entry.file_path().as_ref(), b"test.txt");
-    assert_eq!(entry.compression_method(), CompressionMethod::Store);
+    assert_eq!(entry.compression_method(), CompressionMethod::STORE);
     assert!(entry.flags().is_encrypted());
     // The distinguishing trait: no data descriptor, so the check byte is the
     // high byte of the CRC32, not of the DOS mod time.

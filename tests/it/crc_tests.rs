@@ -15,7 +15,7 @@ fn build_deflate_zip(content: &[u8]) -> Vec<u8> {
     let mut archive = ZipArchiveWriter::new(&mut output);
     let (mut entry, config) = archive
         .new_file("file.txt")
-        .compression_method(CompressionMethod::Deflate)
+        .compression_method(CompressionMethod::DEFLATE)
         .start()
         .unwrap();
     let encoder = flate2::write::DeflateEncoder::new(&mut entry, flate2::Compression::default());

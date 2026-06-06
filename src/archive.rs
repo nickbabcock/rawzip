@@ -528,7 +528,7 @@ impl<'a> ZipLocalFileHeader<'a> {
     /// Returns the compression method declared in the local file header.
     #[inline]
     pub fn compression_method(&self) -> CompressionMethod {
-        self.fixed.compression_method.as_method()
+        self.fixed.compression_method
     }
 
     /// Returns the last modification date and time declared in the local file header.
@@ -831,122 +831,167 @@ impl Zip64EndOfCentralDirectoryRecord {
     }
 }
 
-/// A numeric identifier for a compression method used in a Zip archive.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct CompressionMethodId(u16);
+/// The compression method used on an individual Zip archive entry.
+///
+/// Contains associated consts for compression methods mentioned in the spec (§
+/// 4.4.5).
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+pub struct CompressionMethod(u16);
 
-impl CompressionMethodId {
-    /// Returns the raw `u16` value of the compression method ID.
+impl CompressionMethod {
+    /// No compression.
+    pub const STORE: Self = Self(0);
+    pub const SHRUNK: Self = Self(1);
+    pub const REDUCE1: Self = Self(2);
+    pub const REDUCE2: Self = Self(3);
+    pub const REDUCE3: Self = Self(4);
+    pub const REDUCE4: Self = Self(5);
+    pub const IMPLODED: Self = Self(6);
+    pub const TOKENIZING: Self = Self(7);
+    /// Deflate.
+    pub const DEFLATE: Self = Self(8);
+    pub const DEFLATE64: Self = Self(9);
+    /// PKWARE DCL Imploding. Historically also labeled "old IBM TERSE" in some
+    /// APPNOTE revisions; method 18 ([`CompressionMethod::TERSE`]) is the
+    /// current ("new") IBM TERSE.
+    pub const DCL_IMPLODE: Self = Self(10);
+    pub const BZIP2: Self = Self(12);
+    pub const LZMA: Self = Self(14);
+    /// IBM CMPSC compression.
+    pub const CMPSC: Self = Self(16);
+    /// IBM TERSE (new).
+    pub const TERSE: Self = Self(18);
+    /// IBM LZ77 z Architecture (PFS).
+    pub const LZ77: Self = Self(19);
+    /// Deprecated zstd id; use [`CompressionMethod::ZSTD`] (93) for zstd.
+    pub const ZSTD_DEPRECATED: Self = Self(20);
+    /// Zstandard.
+    pub const ZSTD: Self = Self(93);
+    pub const MP3: Self = Self(94);
+    pub const XZ: Self = Self(95);
+    pub const JPEG: Self = Self(96);
+    pub const WAVPACK: Self = Self(97);
+    pub const PPMD: Self = Self(98);
+    /// AES encryption.
+    pub const AES: Self = Self(99);
+
+    /// Wrap a raw compression-method id.
     #[inline]
-    pub fn as_u16(&self) -> u16 {
+    pub const fn new(id: u16) -> Self {
+        Self(id)
+    }
+
+    /// Returns the raw value of the compression method.
+    #[inline]
+    pub const fn as_u16(self) -> u16 {
         self.0
     }
 
-    /// Converts the numeric ID to a `CompressionMethod` enum.
+    /// Returns the method name (eg" `"DEFLATE"`) when known
     #[inline]
-    pub fn as_method(&self) -> CompressionMethod {
+    pub const fn name(self) -> Option<&'static str> {
         match self.0 {
-            0 => CompressionMethod::Store,
-            1 => CompressionMethod::Shrunk,
-            2 => CompressionMethod::Reduce1,
-            3 => CompressionMethod::Reduce2,
-            4 => CompressionMethod::Reduce3,
-            5 => CompressionMethod::Reduce4,
-            6 => CompressionMethod::Imploded,
-            7 => CompressionMethod::Tokenizing,
-            8 => CompressionMethod::Deflate,
-            9 => CompressionMethod::Deflate64,
-            10 => CompressionMethod::DclImplode,
-            12 => CompressionMethod::Bzip2,
-            14 => CompressionMethod::Lzma,
-            16 => CompressionMethod::Cmpsc,
-            18 => CompressionMethod::Terse,
-            19 => CompressionMethod::Lz77,
-            20 => CompressionMethod::ZstdDeprecated,
-            93 => CompressionMethod::Zstd,
-            94 => CompressionMethod::Mp3,
-            95 => CompressionMethod::Xz,
-            96 => CompressionMethod::Jpeg,
-            97 => CompressionMethod::WavPack,
-            98 => CompressionMethod::Ppmd,
-            99 => CompressionMethod::Aes,
-            _ => CompressionMethod::Unknown(self.0),
+            0 => Some("STORE"),
+            1 => Some("SHRUNK"),
+            2 => Some("REDUCE1"),
+            3 => Some("REDUCE2"),
+            4 => Some("REDUCE3"),
+            5 => Some("REDUCE4"),
+            6 => Some("IMPLODED"),
+            7 => Some("TOKENIZING"),
+            8 => Some("DEFLATE"),
+            9 => Some("DEFLATE64"),
+            10 => Some("DCL_IMPLODE"),
+            12 => Some("BZIP2"),
+            14 => Some("LZMA"),
+            16 => Some("CMPSC"),
+            18 => Some("TERSE"),
+            19 => Some("LZ77"),
+            20 => Some("ZSTD_DEPRECATED"),
+            93 => Some("ZSTD"),
+            94 => Some("MP3"),
+            95 => Some("XZ"),
+            96 => Some("JPEG"),
+            97 => Some("WAVPACK"),
+            98 => Some("PPMD"),
+            99 => Some("AES"),
+            _ => None,
         }
     }
 }
 
-/// The compression method used on an individual Zip archive entry
-///
-/// Documented in the spec under: 4.4.5
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[repr(u16)]
-pub enum CompressionMethod {
-    Store = 0,
-    Shrunk = 1,
-    Reduce1 = 2,
-    Reduce2 = 3,
-    Reduce3 = 4,
-    Reduce4 = 5,
-    Imploded = 6,
-    Tokenizing = 7,
-    Deflate = 8,
-    Deflate64 = 9,
-    DclImplode = 10,
-    Bzip2 = 12,
-    Lzma = 14,
-    Cmpsc = 16,
-    Terse = 18,
-    Lz77 = 19,
-    ZstdDeprecated = 20,
-    Zstd = 93,
-    Mp3 = 94,
-    Xz = 95,
-    Jpeg = 96,
-    WavPack = 97,
-    Ppmd = 98,
-    Aes = 99,
-    Unknown(u16),
+impl core::fmt::Debug for CompressionMethod {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self.name() {
+            Some(name) => write!(f, "CompressionMethod::{name}"),
+            None => write!(f, "CompressionMethod({})", self.0),
+        }
+    }
 }
 
-impl CompressionMethod {
-    /// Return the numeric id of this compression method.
-    #[inline]
-    pub fn as_id(&self) -> CompressionMethodId {
-        let value = match self {
-            CompressionMethod::Store => 0,
-            CompressionMethod::Shrunk => 1,
-            CompressionMethod::Reduce1 => 2,
-            CompressionMethod::Reduce2 => 3,
-            CompressionMethod::Reduce3 => 4,
-            CompressionMethod::Reduce4 => 5,
-            CompressionMethod::Imploded => 6,
-            CompressionMethod::Tokenizing => 7,
-            CompressionMethod::Deflate => 8,
-            CompressionMethod::Deflate64 => 9,
-            CompressionMethod::DclImplode => 10,
-            CompressionMethod::Bzip2 => 12,
-            CompressionMethod::Lzma => 14,
-            CompressionMethod::Cmpsc => 16,
-            CompressionMethod::Terse => 18,
-            CompressionMethod::Lz77 => 19,
-            CompressionMethod::ZstdDeprecated => 20,
-            CompressionMethod::Zstd => 93,
-            CompressionMethod::Mp3 => 94,
-            CompressionMethod::Xz => 95,
-            CompressionMethod::Jpeg => 96,
-            CompressionMethod::WavPack => 97,
-            CompressionMethod::Ppmd => 98,
-            CompressionMethod::Aes => 99,
-            CompressionMethod::Unknown(id) => *id,
-        };
-        CompressionMethodId(value)
+impl core::fmt::Display for CompressionMethod {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(f, "{} ({})", self.0, self.name().unwrap_or("UNKNOWN"))
     }
 }
 
 impl From<u16> for CompressionMethod {
     fn from(id: u16) -> Self {
-        CompressionMethodId(id).as_method()
+        Self(id)
     }
+}
+
+// Backwards-compat aliases for the old enum variant names.
+#[allow(non_upper_case_globals)]
+impl CompressionMethod {
+    #[deprecated(note = "use CompressionMethod::STORE")]
+    pub const Store: Self = Self::STORE;
+    #[deprecated(note = "use CompressionMethod::SHRUNK")]
+    pub const Shrunk: Self = Self::SHRUNK;
+    #[deprecated(note = "use CompressionMethod::REDUCE1")]
+    pub const Reduce1: Self = Self::REDUCE1;
+    #[deprecated(note = "use CompressionMethod::REDUCE2")]
+    pub const Reduce2: Self = Self::REDUCE2;
+    #[deprecated(note = "use CompressionMethod::REDUCE3")]
+    pub const Reduce3: Self = Self::REDUCE3;
+    #[deprecated(note = "use CompressionMethod::REDUCE4")]
+    pub const Reduce4: Self = Self::REDUCE4;
+    #[deprecated(note = "use CompressionMethod::IMPLODED")]
+    pub const Imploded: Self = Self::IMPLODED;
+    #[deprecated(note = "use CompressionMethod::TOKENIZING")]
+    pub const Tokenizing: Self = Self::TOKENIZING;
+    #[deprecated(note = "use CompressionMethod::DEFLATE")]
+    pub const Deflate: Self = Self::DEFLATE;
+    #[deprecated(note = "use CompressionMethod::DEFLATE64")]
+    pub const Deflate64: Self = Self::DEFLATE64;
+    #[deprecated(note = "use CompressionMethod::DCL_IMPLODE")]
+    pub const DclImplode: Self = Self::DCL_IMPLODE;
+    #[deprecated(note = "use CompressionMethod::BZIP2")]
+    pub const Bzip2: Self = Self::BZIP2;
+    #[deprecated(note = "use CompressionMethod::LZMA")]
+    pub const Lzma: Self = Self::LZMA;
+    #[deprecated(note = "use CompressionMethod::CMPSC")]
+    pub const Cmpsc: Self = Self::CMPSC;
+    #[deprecated(note = "use CompressionMethod::TERSE")]
+    pub const Terse: Self = Self::TERSE;
+    #[deprecated(note = "use CompressionMethod::LZ77")]
+    pub const Lz77: Self = Self::LZ77;
+    #[deprecated(note = "use CompressionMethod::ZSTD_DEPRECATED")]
+    pub const ZstdDeprecated: Self = Self::ZSTD_DEPRECATED;
+    #[deprecated(note = "use CompressionMethod::ZSTD")]
+    pub const Zstd: Self = Self::ZSTD;
+    #[deprecated(note = "use CompressionMethod::MP3")]
+    pub const Mp3: Self = Self::MP3;
+    #[deprecated(note = "use CompressionMethod::XZ")]
+    pub const Xz: Self = Self::XZ;
+    #[deprecated(note = "use CompressionMethod::JPEG")]
+    pub const Jpeg: Self = Self::JPEG;
+    #[deprecated(note = "use CompressionMethod::WAVPACK")]
+    pub const WavPack: Self = Self::WAVPACK;
+    #[deprecated(note = "use CompressionMethod::PPMD")]
+    pub const Ppmd: Self = Self::PPMD;
+    #[deprecated(note = "use CompressionMethod::AES")]
+    pub const Aes: Self = Self::AES;
 }
 
 /// A borrowed data from a Zip archive, typically for comments or non-path text.
@@ -1014,7 +1059,7 @@ pub struct ZipFileHeaderRecord<'a> {
     version_made_by: u16,
     version_needed: u16,
     flags: EntryFlags,
-    compression_method: CompressionMethodId,
+    compression_method: CompressionMethod,
     last_mod_time: u16,
     last_mod_date: u16,
     crc32: u32,
@@ -1197,7 +1242,7 @@ impl<'a> ZipFileHeaderRecord<'a> {
     /// The compression method used to compress the data
     #[inline]
     pub fn compression_method(&self) -> CompressionMethod {
-        self.compression_method.as_method()
+        self.compression_method
     }
 
     /// Returns the file path in its raw form.
@@ -1396,7 +1441,7 @@ pub(crate) struct ZipLocalFileHeaderFixed {
     pub(crate) signature: u32,
     pub(crate) version_needed: u16,
     pub(crate) flags: EntryFlags,
-    pub(crate) compression_method: CompressionMethodId,
+    pub(crate) compression_method: CompressionMethod,
     pub(crate) last_mod_time: u16,
     pub(crate) last_mod_date: u16,
     pub(crate) crc32: u32,
@@ -1419,7 +1464,7 @@ impl ZipLocalFileHeaderFixed {
             signature: le_u32(&data[0..4]),
             version_needed: le_u16(&data[4..6]),
             flags: EntryFlags::new(le_u16(&data[6..8])),
-            compression_method: CompressionMethodId(le_u16(&data[8..10])),
+            compression_method: CompressionMethod::new(le_u16(&data[8..10])),
             last_mod_time: le_u16(&data[10..12]),
             last_mod_date: le_u16(&data[12..14]),
             crc32: le_u32(&data[14..18]),
@@ -1472,7 +1517,7 @@ pub(crate) struct ZipFileHeaderFixed {
     pub version_made_by: u16,
     pub version_needed: u16,
     pub flags: EntryFlags,
-    pub compression_method: CompressionMethodId,
+    pub compression_method: CompressionMethod,
     pub last_mod_time: u16,
     pub last_mod_date: u16,
     pub crc32: u32,
@@ -1515,7 +1560,7 @@ impl ZipFileHeaderFixed {
             version_made_by: le_u16(&data[4..6]),
             version_needed: le_u16(&data[6..8]),
             flags: EntryFlags::new(le_u16(&data[8..10])),
-            compression_method: CompressionMethodId(le_u16(&data[10..12])),
+            compression_method: CompressionMethod::new(le_u16(&data[10..12])),
             last_mod_time: le_u16(&data[12..14]),
             last_mod_date: le_u16(&data[14..16]),
             crc32: le_u32(&data[16..20]),
@@ -1592,6 +1637,13 @@ impl ZipFileHeaderFixed {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn compression_method_display() {
+        assert_eq!(CompressionMethod::DEFLATE.to_string(), "8 (DEFLATE)");
+        assert_eq!(CompressionMethod::STORE.to_string(), "0 (STORE)");
+        assert_eq!(CompressionMethod::new(13).to_string(), "13 (UNKNOWN)");
+    }
 
     #[test]
     pub fn trunc_comment_zips() {
@@ -1673,7 +1725,7 @@ mod tests {
             version_made_by: 0,
             version_needed: 0,
             flags: EntryFlags::new(0x08),
-            compression_method: CompressionMethodId(0),
+            compression_method: CompressionMethod::STORE,
             last_mod_time: 0,
             last_mod_date: 0,
             crc32: 0,

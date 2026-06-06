@@ -51,16 +51,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut stdout_lock = stdout.lock();
 
     match compression_method {
-        rawzip::CompressionMethod::Store => {
+        rawzip::CompressionMethod::STORE => {
             let mut verifier = zip_entry.verifying_reader(reader);
             io::copy(&mut verifier, &mut stdout_lock)?;
         }
-        rawzip::CompressionMethod::Deflate => {
+        rawzip::CompressionMethod::DEFLATE => {
             let inflater = flate2::read::DeflateDecoder::new(reader);
             let mut verifier = zip_entry.verifying_reader(inflater);
             io::copy(&mut verifier, &mut stdout_lock)?;
         }
-        rawzip::CompressionMethod::Zstd => {
+        rawzip::CompressionMethod::ZSTD => {
             let decoder = zstd::Decoder::new(reader)?;
             let mut verifier = zip_entry.verifying_reader(decoder);
             io::copy(&mut verifier, &mut stdout_lock)?;
