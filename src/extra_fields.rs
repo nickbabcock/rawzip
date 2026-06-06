@@ -296,41 +296,6 @@ impl<const N: usize> StackVec<u8, N> {
     }
 }
 
-#[derive(Debug)]
-pub enum StackVecIter<'a, T, const N: usize>
-where
-    T: Copy + Clone,
-{
-    Small {
-        data: &'a [T; N],
-        len: u8,
-        index: u8,
-    },
-    Large(std::slice::Iter<'a, T>),
-}
-
-impl<'a, T, const N: usize> Iterator for StackVecIter<'a, T, N>
-where
-    T: Copy + Clone,
-{
-    type Item = &'a T;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        match self {
-            Self::Small { data, len, index } => {
-                if *index < *len {
-                    let result = &data[*index as usize];
-                    *index += 1;
-                    Some(result)
-                } else {
-                    None
-                }
-            }
-            Self::Large(iter) => iter.next(),
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use std::io::Cursor;
