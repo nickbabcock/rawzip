@@ -1979,6 +1979,18 @@ mod tests {
             "gophercolor16x16.png compressed data should be at bytes 169-954"
         );
 
+        let (s1, e1) = slice_range1;
+        assert!(std::ptr::eq(
+            slice_entry1.data(),
+            &test_zip[s1 as usize..e1 as usize]
+        ));
+
+        let (s2, e2) = slice_range2;
+        assert!(std::ptr::eq(
+            slice_entry2.data(),
+            &test_zip[s2 as usize..e2 as usize]
+        ));
+
         // Test ZipEntry API
         let file = std::fs::File::open("assets/test.zip").unwrap();
         let mut buffer = vec![0u8; RECOMMENDED_BUFFER_SIZE];
