@@ -3,7 +3,7 @@
 //! providing a basic ZIP extraction. Limitations of this example (but not of
 //! rawzip).
 //!
-//! - Supports only store and deflate compression methods
+//! - Supports only store, deflate, and zstd compression methods
 //! - Supports only UTF-8 file paths
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -163,9 +163,15 @@ fn extract_zip_archive<P: AsRef<std::path::Path>>(
         // "DEFLATE, the compression algorithm most commonly supported by zip
         // parsers, cannot achieve a compression ratio greater than 1032"
         // https://www.bamsoftware.com/hacks/zipbomb/
+        //
+        // We only check for deflate as other methods (like zstd) don't have
+        // such convenient limits
         let compressed_size = entry.compressed_size_hint();
         let uncompressed_size = entry.uncompressed_size_hint();
-        if compressed_size > 0 && uncompressed_size / compressed_size > 1032 {
+        if compressed_size > 0
+            && uncompressed_size / compressed_size > 1032
+            && matches!(entry.compression_method(), CompressionMethod::Deflate)
+        {
             eprintln!("Skipped potential zip bomb: compression ratio {:.1}:1 exceeds limit of 1032:1 for file: {file_path:?}", 
                          uncompressed_size as f64 / compressed_size as f64);
             continue;
@@ -198,6 +204,24 @@ fn extract_zip_archive<P: AsRef<std::path::Path>>(
                     ExtractionError::io_context(
                         e,
                         format!("Failed to extract deflated file: {}", file_path.as_ref()),
+                    )
+                })?;
+            }
+            CompressionMethod::Zstd | CompressionMethod::ZstdDeprecated => {
+                let decoder = zstd::Decoder::new(reader).map_err(|e| {
+                    ExtractionError::io_context(
+                        e,
+                        format!(
+                            "Failed to start zstd decoder for file: {}",
+                            file_path.as_ref()
+                        ),
+                    )
+                })?;
+                let mut verifier = zip_entry.verifying_reader(decoder);
+                std::io::copy(&mut verifier, &mut outfile).map_err(|e| {
+                    ExtractionError::io_context(
+                        e,
+                        format!("Failed to extract zstd file: {}", file_path.as_ref()),
                     )
                 })?;
             }
