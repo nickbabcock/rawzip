@@ -34,6 +34,12 @@ pub fn filled_bytes<const BYTE: u8>(size: usize) -> Vec<u8> {
     vec![BYTE; size]
 }
 
+/// Repeating near-miss of the EOCD signature: `0x50 0x4b 0xff 0x06`.
+pub fn near_miss_bytes(size: usize) -> Vec<u8> {
+    const PATTERN: [u8; 4] = [0x50, 0x4b, 0xff, 0x06];
+    (0..size).map(|i| PATTERN[i % PATTERN.len()]).collect()
+}
+
 pub fn deterministic_random_bytes(size: usize) -> Vec<u8> {
     let mut state = 0x4d59_5df4_d0f3_3173u64;
     let mut output = Vec::with_capacity(size);

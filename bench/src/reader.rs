@@ -1,7 +1,7 @@
 pub mod criterion_benches {
     use crate::shared::{
-        create_test_zip, deterministic_random_bytes, filled_bytes, setup_reader_fixture,
-        sum_slice_entries, LARGE_ENTRY_COUNT, SIZE_CASES,
+        create_test_zip, deterministic_random_bytes, filled_bytes, near_miss_bytes,
+        setup_reader_fixture, sum_slice_entries, LARGE_ENTRY_COUNT, SIZE_CASES,
     };
     use criterion::{BenchmarkId, Criterion, Throughput};
     use rawzip::ZipLocator;
@@ -23,10 +23,11 @@ pub mod criterion_benches {
         let mut group = c.benchmark_group("eocd-locator");
 
         type SetupFn = fn(usize) -> Vec<u8>;
-        let scenarios: [(&str, SetupFn); 3] = [
+        let scenarios: [(&str, SetupFn); 4] = [
             ("no-candidates", filled_bytes::<4>),
             ("random", deterministic_random_bytes),
             ("all-candidates", filled_bytes::<6>),
+            ("near-miss", near_miss_bytes),
         ];
         for (scenario, setup) in scenarios {
             for size in SIZE_CASES {
@@ -112,9 +113,9 @@ pub mod criterion_benches {
 #[cfg(not(target_family = "wasm"))]
 pub mod gungraun_benches {
     use crate::shared::{
-        create_test_zip, deterministic_random_bytes, filled_bytes, setup_reader_entries_fixture,
-        setup_reader_fixture, setup_slice_entries_fixture, ReaderEntriesFixture, ReaderFixture,
-        SliceEntriesFixture,
+        create_test_zip, deterministic_random_bytes, filled_bytes, near_miss_bytes,
+        setup_reader_entries_fixture, setup_reader_fixture, setup_slice_entries_fixture,
+        ReaderEntriesFixture, ReaderFixture, SliceEntriesFixture,
     };
     use gungraun::{library_benchmark, library_benchmark_group};
     use std::hint::black_box;
@@ -164,12 +165,15 @@ pub mod gungraun_benches {
         black_box(measure_missing_eocd(&data))
     }
 
-    // Worst case for the candidate-byte filter: every byte equals the EOCD
-    // signature's last byte (0x06), so every position is a candidate that must
-    // be confirmed (and rejected) by the full comparison.
     #[library_benchmark]
     #[benches::sizes(args = [1usize, 4, 16, 64, 256, 1024, 4096, 16384, 65536], setup = filled_bytes::<6>)]
     fn locate_missing_eocd_all_candidates(data: Vec<u8>) -> bool {
+        black_box(measure_missing_eocd(&data))
+    }
+
+    #[library_benchmark]
+    #[benches::sizes(args = [1usize, 4, 16, 64, 256, 1024, 4096, 16384, 65536], setup = near_miss_bytes)]
+    fn locate_missing_eocd_near_miss(data: Vec<u8>) -> bool {
         black_box(measure_missing_eocd(&data))
     }
 
@@ -207,6 +211,7 @@ pub mod gungraun_benches {
             locate_missing_eocd,
             locate_missing_eocd_random,
             locate_missing_eocd_all_candidates,
+            locate_missing_eocd_near_miss,
             locate_valid_archive,
             locate_valid_archive_reader
         ]
