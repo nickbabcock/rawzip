@@ -3,7 +3,7 @@ publish = false
 name = "rawzip-bench"
 version = "0.0.1"
 authors = ["Nick Babcock <nbabcock19@hotmail.com>"]
-description = "Criterion benchmark suite for rawzip."
+description = "Benchmark suite for rawzip."
 homepage = "https://github.com/nickbabcock/rawzip/tree/master/bench"
 repository = "https://github.com/nickbabcock/rawzip"
 license = "MIT"
@@ -15,13 +15,21 @@ edition = "2021"
 bench = false
 
 [[bench]]
-name = "rawzip-bench"
+name = "rawzip-bench-criterion"
 harness = false
-path = "src/bench.rs"
+path = "src/criterion_main.rs"
+
+[[bench]]
+name = "rawzip-bench-gungraun"
+harness = false
+path = "src/gungraun_main.rs"
 
 [dependencies]
-criterion = "0.6.0"
+criterion = "0.8.2"
 rawzip = { path = ".." }
+
+[target.'cfg(not(target_family = "wasm"))'.dependencies]
+gungraun = "0.19.1"
 
 [profile.release]
 debug = true
