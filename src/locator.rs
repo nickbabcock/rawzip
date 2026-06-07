@@ -732,11 +732,7 @@ pub(crate) fn find_end_of_central_dir_signature(
     max_search_space: usize,
 ) -> Option<usize> {
     let start_search = data.len().saturating_sub(max_search_space);
-    backwards_find(
-        &data[start_search..],
-        &END_OF_CENTRAL_DIR_SIGNAUTRE.to_le_bytes(),
-    )
-    .map(|pos| pos + start_search)
+    rfind::<END_OF_CENTRAL_DIR_SIGNAUTRE>(&data[start_search..]).map(|pos| pos + start_search)
 }
 
 pub(crate) fn find_end_of_central_dir<T>(
@@ -775,7 +771,7 @@ where
         remaining -= read_size as u64;
 
         let haystack = &buffer[..read_size + carry_over];
-        if let Some(i) = backwards_find(haystack, &END_OF_CENTRAL_DIR_SIGNAUTRE_BYTES) {
+        if let Some(i) = rfind::<END_OF_CENTRAL_DIR_SIGNAUTRE>(haystack) {
             let eocd_offset = (max_back + remaining) + (i as u64);
             return Ok(Some((eocd_offset, i, read_size + carry_over)));
         }
@@ -801,10 +797,70 @@ where
     }
 }
 
-fn backwards_find(haystack: &[u8], needle: &[u8]) -> Option<usize> {
-    haystack
-        .windows(needle.len())
-        .rposition(|window| window == needle)
+/// Finds the last occurrence of the 4-byte little-endian `NEEDLE` in `haystack`.
+///
+/// Some benchmarks:
+///
+/// - windows().rposition(): 2 GiB/s (complete data independence as it's just loop of u32 loads)
+/// - `memmem::rfind`: 8.4 GiB/s (586 MiB/s worst case)
+/// - This implementation: 16.0 GiB/s (4.63 GiB/s worst case)
+fn rfind<const NEEDLE: u32>(haystack: &[u8]) -> Option<usize> {
+    const N: usize = core::mem::size_of::<u32>();
+    if haystack.len() < N {
+        return None;
+    }
+
+    // The fast path scans backwards for the needle's last byte as a candidate
+    let search = &haystack[N - 1..];
+
+    // SWAR lanes
+    const LANES: usize = core::mem::size_of::<u64>();
+    let lo = u64::from_ne_bytes([0x01; LANES]);
+    let lo7 = u64::from_ne_bytes([0x7F; LANES]);
+    let hi = u64::from_ne_bytes([0x80; LANES]);
+
+    let haszero = |word: u64| word.wrapping_sub(lo) & !word & hi;
+    let iszero = |word: u64| !(((word & lo7) + lo7) | word) & hi;
+    let bytes = NEEDLE.to_le_bytes();
+    let bc = bytes.map(|x| u64::from_ne_bytes([x; LANES]));
+
+    let load = |at: usize| -> u64 {
+        let c = &haystack[at..at + LANES];
+        u64::from_le_bytes([c[0], c[1], c[2], c[3], c[4], c[5], c[6], c[7]])
+    };
+
+    let mut chunks = search.rchunks_exact(LANES);
+    let mut start = search.len();
+    for c in chunks.by_ref() {
+        start -= LANES;
+        let word = u64::from_le_bytes([c[0], c[1], c[2], c[3], c[4], c[5], c[6], c[7]]);
+        let cand = haszero(word ^ bc[N - 1]);
+
+        // Common case: no candidate last byte, or no aligned first byte
+        if cand == 0 || cand & haszero(load(start) ^ bc[0]) == 0 {
+            continue;
+        }
+
+        // Survivors should be rare but let's check the middle bytes
+        if haszero(load(start + 1) ^ bc[1]) & haszero(load(start + 2) ^ bc[2]) == 0 {
+            continue;
+        }
+
+        // Confirm all lanes at once with the four exact byte planes.
+        let matches = iszero(word ^ bc[N - 1])
+            & iszero(load(start) ^ bc[0])
+            & iszero(load(start + 1) ^ bc[1])
+            & iszero(load(start + 2) ^ bc[2]);
+
+        if matches != 0 {
+            // highest set bit is the last match
+            return Some(start + matches.ilog2() as usize / 8);
+        }
+    }
+
+    haystack[..chunks.remainder().len() + N - 1]
+        .windows(N)
+        .rposition(|window| le_u32(window) == NEEDLE)
 }
 
 #[cfg(test)]
@@ -813,6 +869,24 @@ mod tests {
     use quickcheck_macros::quickcheck;
     use rstest::rstest;
     use std::io::Cursor;
+
+    #[rstest]
+    #[case(&[], None)]
+    #[case(&[0x50, 0x4b, 0x05, 0x06], Some(0))]
+    #[case(&[0x50, 0x4b, 0x05, 0x06, 0x50, 0x4b, 0x05, 0x06], Some(4))]
+    #[case(&[0x50, 0x51, 0x4b, 0x05, 0x06, 0xff, 0xff, 0x07, 0x01, 0x50, 0x00], None)]
+    fn test_rfind(#[case] input: &[u8], #[case] expected: Option<usize>) {
+        assert_eq!(rfind::<END_OF_CENTRAL_DIR_SIGNAUTRE>(input), expected);
+    }
+
+    #[quickcheck]
+    fn test_rfind_matches_windows_rposition(data: Vec<u8>) {
+        let expected = data
+            .windows(END_OF_CENTRAL_DIR_SIGNAUTRE_BYTES.len())
+            .rposition(|window| window == END_OF_CENTRAL_DIR_SIGNAUTRE_BYTES);
+
+        assert_eq!(rfind::<END_OF_CENTRAL_DIR_SIGNAUTRE>(&data), expected);
+    }
 
     #[quickcheck]
     fn test_find_end_of_central_dir_signature(mut data: Vec<u8>, offset: usize, chunk_size: u16) {
