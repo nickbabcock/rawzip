@@ -735,6 +735,9 @@ pub(crate) fn find_end_of_central_dir_signature(
     rfind::<END_OF_CENTRAL_DIR_SIGNAUTRE>(&data[start_search..]).map(|pos| pos + start_search)
 }
 
+const INIT_SCAN_WINDOW: usize = 1024;
+const MAX_SCAN_WINDOW: usize = 64 * 1024;
+
 pub(crate) fn find_end_of_central_dir<T>(
     reader: T,
     buffer: &mut [u8],
@@ -749,52 +752,41 @@ where
         return Ok(None);
     }
 
+    // Cap the search space buffer to 64 KiB
+    let buffer_len = buffer.len().min(MAX_SCAN_WINDOW);
+    let buffer = &mut buffer[..buffer_len];
+
     let max_back = end_offset.saturating_sub(max_search_space);
-    let mut offset = end_offset;
+    let mut chunk_end = end_offset;
 
-    // The amount of data the remains in the stream
-    let mut remaining = end_offset - max_back;
+    // The first search span is smaller as most zips do not have comments (or
+    // have short comments if present).
+    let mut window = INIT_SCAN_WINDOW.min(buffer.len());
+    while chunk_end > max_back {
+        let read_size = window.min((chunk_end - max_back) as usize);
+        let chunk_start = chunk_end - read_size as u64;
+        let haystack = &mut buffer[..read_size];
 
-    // The number of bytes that were translated from the front to the back
-    let mut carry_over = 0;
-    loop {
-        // We either want to read into the entire buffer (sans the bytes that
-        // were carried over from the last read). Or we want to read the remainder
-        let read_size = (buffer.len() - carry_over).min(remaining as usize);
+        reader.read_exact_at(haystack, chunk_start)?;
 
-        // Need to jump back to the start of the previous read and then how much
-        // we want to read
-        offset -= read_size as u64;
-
-        // reader.seek_relative(-offset)?;
-        reader.read_exact_at(&mut buffer[..read_size], offset)?;
-        remaining -= read_size as u64;
-
-        let haystack = &buffer[..read_size + carry_over];
         if let Some(i) = rfind::<END_OF_CENTRAL_DIR_SIGNAUTRE>(haystack) {
-            let eocd_offset = (max_back + remaining) + (i as u64);
-            return Ok(Some((eocd_offset, i, read_size + carry_over)));
+            return Ok(Some((chunk_start + i as u64, i, read_size)));
         }
 
-        if remaining == 0 {
-            return Ok(None);
+        if chunk_start == max_back {
+            break;
         }
 
-        // Since the signature may be across read boundaries, match how much the
-        // end of the signature matches the start of the buffer
-        carry_over = match buffer {
-            [b0, b1, b2, ..] if [*b0, *b1, *b2] == END_OF_CENTRAL_DIR_SIGNAUTRE_BYTES[1..4] => 3,
-            [b0, b1, ..] if [*b0, *b1] == END_OF_CENTRAL_DIR_SIGNAUTRE_BYTES[2..4] => 2,
-            [b0, ..] if *b0 == END_OF_CENTRAL_DIR_SIGNAUTRE_BYTES[3] => 1,
-            _ => 0,
-        };
+        // Instead of worrying about copying data around in the buffer, just
+        // re-read a few bytes again.
+        chunk_end = chunk_start + END_OF_CENTRAL_DIR_SIGNAUTRE_BYTES.len() as u64 - 1;
 
-        if carry_over > 0 {
-            // place the carry over bytes at the end of the buffer for the next read
-            let dest = (buffer.len() - carry_over).min(remaining as usize);
-            buffer.copy_within(..carry_over, dest);
-        }
+        // first iteration used a smaller window, so on future iterations let's
+        // go larger.
+        window = buffer.len();
     }
+
+    Ok(None)
 }
 
 /// Finds the last occurrence of the 4-byte little-endian `NEEDLE` in `haystack`.
@@ -1030,5 +1022,35 @@ mod tests {
                 END_OF_CENTRAL_DIR_SIGNAUTRE_BYTES
             );
         }
+    }
+
+    #[rstest]
+    #[case(1)]
+    #[case(2)]
+    #[case(3)]
+    #[case(4)]
+    fn test_find_end_of_central_dir_grows_initial_scan_window(#[case] bytes_before_window: usize) {
+        let mut data = vec![0u8; INIT_SCAN_WINDOW * 4];
+        let expected = data.len() - INIT_SCAN_WINDOW - bytes_before_window;
+        data[expected..expected + 4].copy_from_slice(&END_OF_CENTRAL_DIR_SIGNAUTRE_BYTES);
+
+        let mut buffer = vec![0xa5; MAX_SCAN_WINDOW * 2];
+        let (offset, buffer_pos, buffer_valid_len) = find_end_of_central_dir(
+            Cursor::new(&data),
+            &mut buffer,
+            END_OF_CENTRAL_DIR_MAX_OFFSET,
+            data.len() as u64,
+        )
+        .unwrap()
+        .unwrap();
+
+        assert_eq!(offset, expected as u64);
+        assert!(buffer_valid_len <= MAX_SCAN_WINDOW);
+        assert!(buffer_pos + END_OF_CENTRAL_DIR_SIGNAUTRE_BYTES.len() <= buffer_valid_len);
+        assert_eq!(
+            buffer[buffer_pos..buffer_pos + END_OF_CENTRAL_DIR_SIGNAUTRE_BYTES.len()],
+            END_OF_CENTRAL_DIR_SIGNAUTRE_BYTES
+        );
+        assert!(buffer[MAX_SCAN_WINDOW..].iter().all(|byte| *byte == 0xa5));
     }
 }
