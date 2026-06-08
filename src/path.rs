@@ -229,6 +229,11 @@ impl ZipFilePath<()> {
             result.push_str(split);
         }
 
+        // Preserve a trailing slash so directory entries remain directories.
+        if s.as_bytes().last() == Some(&b'/') && !result.is_empty() {
+            result.push('/');
+        }
+
         result
     }
 }
@@ -390,6 +395,15 @@ mod tests {
     #[case(b"C:\\hello\\test.txt", "hello/test.txt")]
     #[case(b"C:/hello\\test.txt", "hello/test.txt")]
     #[case(b"C:/hello/test.txt", "hello/test.txt")]
+    #[case(b"foo/bar/", "foo/bar/")]
+    #[case(b"foo\\bar\\", "foo/bar/")]
+    #[case(b"dir//sub/", "dir/sub/")]
+    #[case(b"dir/./", "dir/")]
+    #[case(b"x..y/", "x..y/")]
+    #[case(b"a/b/../", "a/")]
+    #[case(b"dir\\", "dir/")]
+    #[case(b"../", "")]
+    #[case(b"./", "")]
     fn test_zip_path_normalized(#[case] input: &[u8], #[case] expected: &str) {
         assert_eq!(
             ZipFilePath::from_bytes(input)
