@@ -82,7 +82,15 @@ pub enum ErrorKind {
     Eof,
 }
 
-impl std::error::Error for Error {}
+impl std::error::Error for Error {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match &self.inner.kind {
+            ErrorKind::IO(e) => Some(e),
+            ErrorKind::InvalidUtf8(e) => Some(e),
+            _ => None,
+        }
+    }
+}
 
 impl std::fmt::Display for Error {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
@@ -151,5 +159,29 @@ impl From<ErrorKind> for Error {
 impl From<std::io::Error> for Error {
     fn from(err: std::io::Error) -> Error {
         Error::from(ErrorKind::IO(err))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::error::Error as _;
+
+    #[test]
+    fn source_exposes_wrapped_errors() {
+        let io = Error::io(std::io::Error::new(std::io::ErrorKind::Other, "boom"));
+        let io_source = io.source().expect("IO error should expose a source");
+        assert!(io_source.is::<std::io::Error>());
+
+        let invalid = vec![0xff_u8];
+        let utf8 = Error::utf8(std::str::from_utf8(&invalid).unwrap_err());
+        let utf8_source = utf8.source().expect("UTF-8 error should expose a source");
+        assert!(utf8_source.is::<std::str::Utf8Error>());
+    }
+
+    #[test]
+    fn source_is_none_for_non_wrapping_errors() {
+        let eof = Error::from(ErrorKind::Eof);
+        assert!(eof.source().is_none());
     }
 }
