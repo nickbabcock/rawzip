@@ -2,7 +2,7 @@
 name = "rawzip"
 version = "0.4.4"
 authors = ["Nick Babcock <nbabcock19@hotmail.com>"]
-edition = "2021"
+edition = "2024"
 description = "A Zip archive reader and writer"
 repository = "https://github.com/nickbabcock/rawzip"
 readme = "README.md"
@@ -10,7 +10,7 @@ license = "MIT"
 keywords = ["zip", "archive"]
 categories = ["filesystem", "compression", "parser-implementations"]
 include = ["src/**/*.rs", "/examples", "LICENSE.txt", "assets", "tests"]
-rust-version = "1.70"
+rust-version = "1.85"
 
 [dependencies]
 

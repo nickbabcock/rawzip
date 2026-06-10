@@ -1,4 +1,4 @@
-use rawzip::{ZipArchive, ZipArchiveWriter, RECOMMENDED_BUFFER_SIZE};
+use rawzip::{RECOMMENDED_BUFFER_SIZE, ZipArchive, ZipArchiveWriter};
 use rstest::rstest;
 use std::io::{Cursor, Write};
 
@@ -52,7 +52,7 @@ fn test_zip64_threshold_entries(#[case] entry_count: usize, #[case] should_be_zi
         .build(output);
 
     for i in 0..entry_count {
-        let filename = format!("file_{:05}.txt", i);
+        let filename = format!("file_{i:05}.txt");
         let (mut entry, config) = archive.new_file(&filename).start().unwrap();
         let mut writer = config.wrap(&mut entry);
         writer.write_all(b"x").unwrap();
@@ -69,17 +69,13 @@ fn test_zip64_threshold_entries(#[case] entry_count: usize, #[case] should_be_zi
     } else {
         "standard ZIP"
     };
-    println!(
-        "Created {} archive with {} entries",
-        archive_type, entry_count
-    );
+    println!("Created {archive_type} archive with {entry_count} entries");
 
     // Verify ZIP64 signatures presence matches expectation
     let has_zip64 = contains_zip64_signatures(&data);
     assert_eq!(
         has_zip64, should_be_zip64,
-        "{} entries expected zip64: {}",
-        entry_count, should_be_zip64
+        "{entry_count} entries expected zip64: {should_be_zip64}"
     );
 
     verify_expected_entries(&data, entry_count as u64);

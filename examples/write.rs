@@ -54,15 +54,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         } else if path.is_dir() {
             add_directory_to_archive(&mut archive, path, "", compression_method)?;
         } else {
-            eprintln!(
-                "Warning: '{}' does not exist or is not a regular file/directory",
-                input_path
-            );
+            eprintln!("Warning: '{input_path}' does not exist or is not a regular file/directory");
         }
     }
 
     archive.finish()?;
-    println!("Successfully created '{}'", output_path);
+    println!("Successfully created '{output_path}'");
     Ok(())
 }
 
@@ -120,7 +117,7 @@ fn add_file_to_archive<W: Write>(
         }
     }
 
-    println!("  adding: {}", archive_path);
+    println!("  adding: {archive_path}");
     Ok(())
 }
 
@@ -141,7 +138,7 @@ fn add_directory_to_archive<W: Write>(
         let archive_path = if base_path.is_empty() {
             name_str.to_string()
         } else {
-            format!("{}/{}", base_path, name_str)
+            format!("{base_path}/{name_str}")
         };
 
         if path.is_file() {
@@ -151,7 +148,7 @@ fn add_directory_to_archive<W: Write>(
             let metadata = fs::metadata(&path)?;
             let modification_time = get_modification_time(&metadata)?;
 
-            let dir_archive_path = format!("{}/", archive_path);
+            let dir_archive_path = format!("{archive_path}/");
             let mut builder = archive
                 .new_dir(&dir_archive_path)
                 .last_modified(modification_time);
@@ -161,7 +158,7 @@ fn add_directory_to_archive<W: Write>(
             }
 
             builder.create()?;
-            println!("  adding: {}", dir_archive_path);
+            println!("  adding: {dir_archive_path}");
 
             // Recursively add directory contents
             add_directory_to_archive(archive, &path, &archive_path, compression_method)?;

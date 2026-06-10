@@ -1038,23 +1038,23 @@ mod tests {
     fn test_zip_datetime_display() {
         // Test with zero nanoseconds - should omit the nanosecond part
         let datetime_no_nanos = utc_from_components(2023, 6, 15, 14, 30, 42, 0);
-        assert_eq!(format!("{}", datetime_no_nanos), "2023-06-15T14:30:42Z");
+        assert_eq!(format!("{datetime_no_nanos}"), "2023-06-15T14:30:42Z");
 
         // Test with non-zero nanoseconds - should include the nanosecond part
         let datetime_with_nanos = utc_from_components(2023, 6, 15, 14, 30, 42, 500000000);
         assert_eq!(
-            format!("{}", datetime_with_nanos),
+            format!("{datetime_with_nanos}"),
             "2023-06-15T14:30:42.500000000Z"
         );
 
         // Test local time with zero nanoseconds
         let datetime_local = local_from_components(2023, 6, 15, 14, 30, 42, 0);
-        assert_eq!(format!("{}", datetime_local), "2023-06-15T14:30:42");
+        assert_eq!(format!("{datetime_local}"), "2023-06-15T14:30:42");
 
         // Test local time with nanoseconds
         let datetime_local_nanos = local_from_components(2023, 6, 15, 14, 30, 42, 123456789);
         assert_eq!(
-            format!("{}", datetime_local_nanos),
+            format!("{datetime_local_nanos}"),
             "2023-06-15T14:30:42.123456789"
         );
     }

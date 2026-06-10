@@ -195,7 +195,7 @@ impl ZipFilePath<()> {
                 _ => {
                     return ZipFilePath {
                         data: NormalizedPath(Cow::Borrowed(name)),
-                    }
+                    };
                 }
             }
         }
@@ -445,8 +445,7 @@ mod tests {
         assert_eq!(
             path.needs_utf8_encoding(),
             expected,
-            "Failed for input: {}",
-            input
+            "Failed for input: {input}"
         );
     }
 

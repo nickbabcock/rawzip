@@ -851,7 +851,7 @@ fn catch_incorrect_crc_without_data_descriptor() {
             assert_eq!(*expected, corrupted_crc);
             assert_eq!(*actual, original_crc);
         }
-        other => panic!("expected InvalidChecksum error, got {:?}", other),
+        other => panic!("expected InvalidChecksum error, got {other:?}"),
     }
 
     // Ensure that the reader verifier rejects the bad CRC
@@ -873,7 +873,7 @@ fn catch_incorrect_crc_without_data_descriptor() {
             assert_eq!(*expected, corrupted_crc);
             assert_eq!(*actual, original_crc);
         }
-        other => panic!("expected InvalidChecksum error, got {:?}", other),
+        other => panic!("expected InvalidChecksum error, got {other:?}"),
     }
 }
 

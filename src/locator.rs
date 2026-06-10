@@ -2,8 +2,8 @@ use crate::errors::{Error, ErrorKind};
 use crate::reader_at::{FileReader, ReaderAtExt};
 use crate::utils::{le_u16, le_u32, le_u64};
 use crate::{
-    ReaderAt, Zip64EndOfCentralDirectory, Zip64EndOfCentralDirectoryRecord, ZipArchive,
-    ZipFileHeaderFixed, ZipSliceArchive, END_OF_CENTRAL_DIR_LOCATOR_SIGNATURE,
+    END_OF_CENTRAL_DIR_LOCATOR_SIGNATURE, ReaderAt, Zip64EndOfCentralDirectory,
+    Zip64EndOfCentralDirectoryRecord, ZipArchive, ZipFileHeaderFixed, ZipSliceArchive,
 };
 use std::cell::RefCell;
 use std::fs::File;
@@ -539,7 +539,7 @@ impl EndOfCentralDirectory {
     #[inline]
     pub(crate) fn head_eocd_offset(&self) -> u64 {
         self.zip64_eocd_offset
-            .map(|x| x.get())
+            .map(std::num::NonZero::get)
             .unwrap_or(self.eocd_offset)
     }
 

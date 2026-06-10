@@ -57,7 +57,7 @@ jobs:
     - name: Install Rust
       uses: dtolnay/rust-toolchain@master
       with:
-        toolchain: 1.70.0
+        toolchain: 1.85.0
     - run: cargo build --verbose
 
   cross:

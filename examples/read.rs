@@ -1,4 +1,4 @@
-use rawzip::{ZipArchive, RECOMMENDED_BUFFER_SIZE};
+use rawzip::{RECOMMENDED_BUFFER_SIZE, ZipArchive};
 use std::env;
 use std::fs::File;
 use std::io;
@@ -66,10 +66,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             io::copy(&mut verifier, &mut stdout_lock)?;
         }
         _ => {
-            eprintln!(
-                "Error: Unsupported compression method: {:?}",
-                compression_method
-            );
+            eprintln!("Error: Unsupported compression method: {compression_method:?}");
             std::process::exit(1);
         }
     }

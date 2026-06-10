@@ -1,4 +1,4 @@
-use rawzip::{ZipArchive, RECOMMENDED_BUFFER_SIZE};
+use rawzip::{RECOMMENDED_BUFFER_SIZE, ZipArchive};
 use std::env;
 use std::fs::File;
 use std::io::Write;
@@ -17,7 +17,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut buffer = vec![0u8; RECOMMENDED_BUFFER_SIZE];
     let archive = ZipArchive::from_file(file, &mut buffer)?;
 
-    println!("Archive:  {}", archive_path);
+    println!("Archive:  {archive_path}");
 
     let mut comment_reader = archive.comment();
     if comment_reader.remaining() > 0 {
@@ -64,7 +64,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let size_str = if entry.is_dir() {
             format!("{:9}", "")
         } else {
-            format!("{:9}", uncompressed_size)
+            format!("{uncompressed_size:9}")
         };
 
         print!(
@@ -79,16 +79,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     println!("---------  --------------------  ----------  -------");
     println!(
-        "{:9}                                             {} files",
-        total_uncompressed, file_count
+        "{total_uncompressed:9}                                             {file_count} files"
     );
 
     if total_compressed > 0 && total_uncompressed > 0 {
         let compression_ratio = (total_compressed as f64 / total_uncompressed as f64) * 100.0;
-        println!(
-            "Compressed size: {} bytes ({:.1}%)",
-            total_compressed, compression_ratio
-        );
+        println!("Compressed size: {total_compressed} bytes ({compression_ratio:.1}%)");
     }
 
     Ok(())
@@ -127,5 +123,5 @@ fn format_permissions(mode: u32) -> String {
         if mode & 0o001 != 0 { 'x' } else { '-' }
     );
 
-    format!("{}{}{}{}", file_type, owner, group, other)
+    format!("{file_type}{owner}{group}{other}")
 }

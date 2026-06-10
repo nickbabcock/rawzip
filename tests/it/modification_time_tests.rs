@@ -1,7 +1,7 @@
 use rawzip::{
+    ZipArchive, ZipArchiveWriter,
     extra_fields::{ExtraFieldId, ExtraFields},
     time::{LocalDateTime, UtcDateTime, ZipDateTimeKind},
-    ZipArchive, ZipArchiveWriter,
 };
 use std::io::Write;
 
@@ -250,7 +250,7 @@ fn test_multiple_files_different_timestamps() {
                 // Since we now require UTC timestamps, the result should be identical
                 assert_eq!(entry.last_modified(), ZipDateTimeKind::Utc(datetime2));
             }
-            name => panic!("Unexpected file: {}", name),
+            name => panic!("Unexpected file: {name}"),
         }
     }
 }
@@ -395,5 +395,9 @@ fn assert_extend_time_extra_field_difference(mut central: ExtraFields, mut local
         5,
         "Central directory should have 5 bytes (mod time only)"
     );
-    assert_eq!(local_data.len(), 9, "Local header should have 9 bytes (mod + access times) and have richer timestamp data than central directory");
+    assert_eq!(
+        local_data.len(),
+        9,
+        "Local header should have 9 bytes (mod + access times) and have richer timestamp data than central directory"
+    );
 }

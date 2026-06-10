@@ -150,7 +150,7 @@ fn test_zip_declared_prelude(#[case] entry_count: usize) {
         .build(output);
 
     for i in 0..entry_count {
-        let filename = format!("file_{:05}.txt", i);
+        let filename = format!("file_{i:05}.txt");
         let (mut entry, config) = archive.new_file(&filename).start().unwrap();
         let mut writer = config.wrap(&mut entry);
         writer.write_all(b"x").unwrap();

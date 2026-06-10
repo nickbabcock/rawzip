@@ -23,7 +23,7 @@ fn extract_zip_archive<P: AsRef<std::path::Path>>(
     archive_path: P,
     target_dir: P,
 ) -> Result<(), ExtractionError> {
-    use rawzip::{CompressionMethod, ZipArchive, RECOMMENDED_BUFFER_SIZE};
+    use rawzip::{CompressionMethod, RECOMMENDED_BUFFER_SIZE, ZipArchive};
 
     let archive_path = archive_path.as_ref();
     let target_dir = target_dir.as_ref();
@@ -141,8 +141,9 @@ fn extract_zip_archive<P: AsRef<std::path::Path>>(
         if insert_pos > 0 {
             let (_, prev_end) = compressed_ranges[insert_pos - 1];
             if prev_end > current_start {
-                eprintln!("Skipped file with overlapping compressed data: {file_path:?} (range {}..{} overlaps with previous range ending at {})", 
-                             current_start, current_end, prev_end);
+                eprintln!(
+                    "Skipped file with overlapping compressed data: {file_path:?} (range {current_start}..{current_end} overlaps with previous range ending at {prev_end})"
+                );
                 continue;
             }
         }
@@ -151,8 +152,9 @@ fn extract_zip_archive<P: AsRef<std::path::Path>>(
         if insert_pos < compressed_ranges.len() {
             let (next_start, _) = compressed_ranges[insert_pos];
             if current_end > next_start {
-                eprintln!("Skipped file with overlapping compressed data: {file_path:?} (range {}..{} overlaps with next range starting at {})", 
-                             current_start, current_end, next_start);
+                eprintln!(
+                    "Skipped file with overlapping compressed data: {file_path:?} (range {current_start}..{current_end} overlaps with next range starting at {next_start})"
+                );
                 continue;
             }
         }
@@ -172,8 +174,10 @@ fn extract_zip_archive<P: AsRef<std::path::Path>>(
             && uncompressed_size / compressed_size > 1032
             && matches!(entry.compression_method(), CompressionMethod::Deflate)
         {
-            eprintln!("Skipped potential zip bomb: compression ratio {:.1}:1 exceeds limit of 1032:1 for file: {file_path:?}", 
-                         uncompressed_size as f64 / compressed_size as f64);
+            eprintln!(
+                "Skipped potential zip bomb: compression ratio {:.1}:1 exceeds limit of 1032:1 for file: {file_path:?}",
+                uncompressed_size as f64 / compressed_size as f64
+            );
             continue;
         }
 
@@ -278,7 +282,9 @@ fn extract_zip_archive<P: AsRef<std::path::Path>>(
                         })?;
                     }
                     None => {
-                        eprintln!("Invalid local time for file: {file_path:?}, skipping timestamp setting");
+                        eprintln!(
+                            "Invalid local time for file: {file_path:?}, skipping timestamp setting"
+                        );
                     }
                 }
             }
@@ -330,7 +336,7 @@ fn extract_zip_archive<P: AsRef<std::path::Path>>(
     }
 
     if zip_start_offset > 0 {
-        println!("ZIP starting offset: {}", zip_start_offset);
+        println!("ZIP starting offset: {zip_start_offset}");
     }
 
     Ok(())
@@ -352,10 +358,10 @@ impl std::fmt::Display for ExtractionError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             ExtractionError::ZipError { error, context } => {
-                write!(f, "{}: {}", context, error)
+                write!(f, "{context}: {error}")
             }
             ExtractionError::IoError { error, context } => {
-                write!(f, "{}: {}", context, error)
+                write!(f, "{context}: {error}")
             }
         }
     }
