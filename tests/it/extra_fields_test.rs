@@ -1,4 +1,4 @@
-use rawzip::{extra_fields::ExtraFieldId, Header, ZipArchive, ZipArchiveWriter, ZipLocator};
+use rawzip::{Header, ZipArchive, ZipArchiveWriter, ZipLocator, extra_fields::ExtraFieldId};
 use std::io::{Cursor, Write};
 
 #[test]

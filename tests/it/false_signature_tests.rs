@@ -85,8 +85,7 @@ fn test_eocd_offset_points_to_signature() {
         ]);
         assert_eq!(
             signature, 0x06054b50,
-            "eocd_offset should point to EOCD signature (0x06054b50), got 0x{:08x}",
-            signature
+            "eocd_offset should point to EOCD signature (0x06054b50), got 0x{signature:08x}"
         );
     }
 }
@@ -109,8 +108,7 @@ fn test_eocd_offset_points_to_signature_reader() {
         ]);
         assert_eq!(
             signature, 0x06054b50,
-            "eocd_offset should point to EOCD signature (0x06054b50), got 0x{:08x}",
-            signature
+            "eocd_offset should point to EOCD signature (0x06054b50), got 0x{signature:08x}"
         );
     }
 }

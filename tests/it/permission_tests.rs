@@ -47,8 +47,7 @@ fn test_unix_permissions_roundtrip() {
         let actual_mode = entry.mode().value();
         assert_eq!(
             actual_mode, expected_mode,
-            "{}: expected permissions 0o{:o}, got 0o{:o}",
-            description, expected_mode, actual_mode
+            "{description}: expected permissions 0o{expected_mode:o}, got 0o{actual_mode:o}"
         );
     }
 }
@@ -83,8 +82,7 @@ fn test_directory_permissions_roundtrip() {
     let actual_mode = entry.mode().value();
     assert_eq!(
         actual_mode, 0o040755,
-        "Directory permissions: expected 0o040755, got 0o{:o}",
-        actual_mode
+        "Directory permissions: expected 0o040755, got 0o{actual_mode:o}"
     );
 }
 
@@ -115,7 +113,6 @@ fn test_permissions_without_unix_permissions() {
     let actual_mode = entry.mode().value();
     assert_eq!(
         actual_mode, 0o100666,
-        "Default permissions: expected 0o100666, got 0o{:o}",
-        actual_mode
+        "Default permissions: expected 0o100666, got 0o{actual_mode:o}"
     );
 }

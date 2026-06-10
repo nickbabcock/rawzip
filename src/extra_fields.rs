@@ -1,4 +1,4 @@
-use crate::{utils::le_u16, Error, ErrorKind, Header};
+use crate::{Error, ErrorKind, Header, utils::le_u16};
 use std::io::Write;
 
 /// A numeric identifier for an extra field in a Zip archive.

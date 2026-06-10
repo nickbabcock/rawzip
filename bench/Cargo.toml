@@ -7,7 +7,7 @@ description = "Benchmark suite for rawzip."
 homepage = "https://github.com/nickbabcock/rawzip/tree/master/bench"
 repository = "https://github.com/nickbabcock/rawzip"
 license = "MIT"
-edition = "2021"
+edition = "2024"
 
 [workspace]
 

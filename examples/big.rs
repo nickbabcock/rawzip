@@ -44,7 +44,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Add 100,000 small files with Store compression
     for i in 0..100_000 {
-        let filename = format!("file_{:05}.txt", i);
+        let filename = format!("file_{i:05}.txt");
 
         let (mut entry, config) = archive
             .new_file(&filename)

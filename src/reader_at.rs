@@ -48,7 +48,7 @@ pub(crate) trait ReaderAtExt {
     ) -> std::io::Result<usize>;
 
     fn read_at_least_at(&self, buffer: &mut [u8], size: usize, offset: u64)
-        -> Result<usize, Error>;
+    -> Result<usize, Error>;
 }
 
 impl<T: ReaderAt> ReaderAtExt for T {

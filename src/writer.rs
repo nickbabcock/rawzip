@@ -1,13 +1,13 @@
 use crate::{
+    CENTRAL_HEADER_SIGNATURE, CompressionMethod, DataDescriptor,
+    END_OF_CENTRAL_DIR_LOCATOR_SIGNATURE, END_OF_CENTRAL_DIR_SIGNATURE64,
+    END_OF_CENTRAL_DIR_SIGNAUTRE_BYTES, Error, Header, ZipFileHeaderFixed, ZipLocalFileHeaderFixed,
     crc,
     errors::ErrorKind,
     extra_fields::{ExtraFieldId, ExtraFieldsContainer},
     mode::CREATOR_UNIX,
     path::{NormalizedPath, ZipFilePath},
     time::{DosDateTime, UtcDateTime},
-    CompressionMethod, DataDescriptor, Error, Header, ZipFileHeaderFixed, ZipLocalFileHeaderFixed,
-    CENTRAL_HEADER_SIGNATURE, END_OF_CENTRAL_DIR_LOCATOR_SIGNATURE, END_OF_CENTRAL_DIR_SIGNATURE64,
-    END_OF_CENTRAL_DIR_SIGNAUTRE_BYTES,
 };
 use std::io::{self, Write};
 
@@ -753,7 +753,7 @@ where
         // Determine if we need ZIP64 format
         let needs_zip64 = total_entries >= ZIP64_THRESHOLD_ENTRIES
             || central_directory_offset >= ZIP64_THRESHOLD_OFFSET
-            || self.files.iter().any(|f| f.needs_zip64());
+            || self.files.iter().any(FileHeader::needs_zip64);
 
         let mut name_offset = 0;
 

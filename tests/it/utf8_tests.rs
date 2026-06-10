@@ -32,8 +32,7 @@ fn test_filename_utf8_flag(#[case] filename: &str, #[case] should_have_utf8_flag
 
     assert_eq!(
         utf8_flag_present, should_have_utf8_flag,
-        "UTF-8 flag mismatch for filename '{}': expected {}, got {}",
-        filename, should_have_utf8_flag, utf8_flag_present
+        "UTF-8 flag mismatch for filename '{filename}': expected {should_have_utf8_flag}, got {utf8_flag_present}"
     );
 }
 
@@ -59,8 +58,7 @@ fn test_directory_utf8_flag(#[case] dirname: &str, #[case] should_have_utf8_flag
 
     assert_eq!(
         utf8_flag_present, should_have_utf8_flag,
-        "UTF-8 flag mismatch for directory '{}': expected {}, got {}",
-        dirname, should_have_utf8_flag, utf8_flag_present
+        "UTF-8 flag mismatch for directory '{dirname}': expected {should_have_utf8_flag}, got {utf8_flag_present}"
     );
 }
 
@@ -78,7 +76,7 @@ fn extract_flags_from_zip(zip_data: &[u8]) -> u16 {
     // Check for local file header signature
     let signature = u32::from_le_bytes([zip_data[0], zip_data[1], zip_data[2], zip_data[3]]);
     if signature != 0x04034b50 {
-        panic!("Invalid local file header signature: 0x{:x}", signature);
+        panic!("Invalid local file header signature: 0x{signature:x}");
     }
 
     // Extract general purpose bit flag (bytes 6-7)

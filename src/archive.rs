@@ -2,12 +2,12 @@ use crate::crc::crc32_chunk;
 use crate::errors::{Error, ErrorKind};
 use crate::extra_fields::{ExtraFieldId, ExtraFields};
 use crate::mode::{
-    msdos_mode_to_file_mode, unix_mode_to_file_mode, EntryMode, CREATOR_FAT, CREATOR_MACOS,
-    CREATOR_NTFS, CREATOR_UNIX, CREATOR_VFAT,
+    CREATOR_FAT, CREATOR_MACOS, CREATOR_NTFS, CREATOR_UNIX, CREATOR_VFAT, EntryMode,
+    msdos_mode_to_file_mode, unix_mode_to_file_mode,
 };
 use crate::path::{RawPath, ZipFilePath};
 use crate::reader_at::{FileReader, MutexReader, RangeReader, ReaderAt, ReaderAtExt};
-use crate::time::{extract_best_timestamp, ZipDateTimeKind};
+use crate::time::{ZipDateTimeKind, extract_best_timestamp};
 use crate::utils::{le_u16, le_u32, le_u64};
 use crate::{EndOfCentralDirectory, EndOfCentralDirectoryRecordFixed, ZipLocator};
 use std::io::{Read, Seek, Write};

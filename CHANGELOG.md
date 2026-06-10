@@ -1,3 +1,7 @@
+## Unreleased
+
+- Raise minimum supported Rust version (MSRV) to 1.85 and move to the 2024 edition
+
 ## v0.4.4 - March 9th, 2026
 
 - Fix reader-backed `verifying_reader` CRC validation for entries without a data descriptor so corrupted data is rejected when the CRC comes from the central directory

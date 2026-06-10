@@ -118,25 +118,23 @@ impl std::fmt::Display for ErrorKind {
             ErrorKind::InvalidSignature { expected, actual } => {
                 write!(
                     f,
-                    "Invalid signature: expected 0x{:08x}, got 0x{:08x}",
-                    expected, actual
+                    "Invalid signature: expected 0x{expected:08x}, got 0x{actual:08x}"
                 )
             }
             ErrorKind::InvalidChecksum { expected, actual } => {
                 write!(
                     f,
-                    "Invalid checksum: expected 0x{:08x}, got 0x{:08x}",
-                    expected, actual
+                    "Invalid checksum: expected 0x{expected:08x}, got 0x{actual:08x}"
                 )
             }
             ErrorKind::InvalidSize { expected, actual } => {
-                write!(f, "Invalid size: expected {}, got {}", expected, actual)
+                write!(f, "Invalid size: expected {expected}, got {actual}")
             }
             ErrorKind::InvalidUtf8(ref err) => {
-                write!(f, "Invalid UTF-8: {}", err)
+                write!(f, "Invalid UTF-8: {err}")
             }
             ErrorKind::InvalidInput { ref msg } => {
-                write!(f, "Invalid input: {}", msg)
+                write!(f, "Invalid input: {msg}")
             }
             ErrorKind::InvalidEndOfCentralDirectory => {
                 write!(f, "Invalid end of central directory")
@@ -169,7 +167,7 @@ mod tests {
 
     #[test]
     fn source_exposes_wrapped_errors() {
-        let io = Error::io(std::io::Error::new(std::io::ErrorKind::Other, "boom"));
+        let io = Error::io(std::io::Error::other("boom"));
         let io_source = io.source().expect("IO error should expose a source");
         assert!(io_source.is::<std::io::Error>());
 
