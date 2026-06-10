@@ -778,7 +778,10 @@ where
 /// This struct is used to verify the integrity of decompressed data.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ZipVerification {
+    /// The expected CRC32 checksum of the uncompressed data.
     pub crc: u32,
+
+    /// The expected uncompressed size of the entry.
     pub uncompressed_size: u64,
 }
 
@@ -795,8 +798,7 @@ impl ZipVerification {
 
     /// Validates the size and CRC of the entry.
     ///
-    /// This function will return an error if the size or CRC does not match
-    /// the expected values.
+    /// Returns an error if either the size or the CRC does not match.
     pub fn valid(&self, rhs: ZipVerification) -> Result<(), Error> {
         if self.size() != rhs.size() {
             return Err(Error::from(ErrorKind::InvalidSize {
@@ -805,8 +807,7 @@ impl ZipVerification {
             }));
         }
 
-        // If the CRC is 0, then it is not verified.
-        if self.crc() != 0 && self.crc() != rhs.crc() {
+        if self.crc() != rhs.crc() {
             return Err(Error::from(ErrorKind::InvalidChecksum {
                 expected: self.crc(),
                 actual: rhs.crc(),
