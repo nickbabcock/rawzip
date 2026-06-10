@@ -1201,7 +1201,7 @@ fn test_custom_crc_reader() {
     let zip_reader = reader.into_inner().into_inner();
     let verification = zip_reader.claim_verifier().unwrap();
     assert_ne!(actual_crc, 0, "CRC should not be zero");
-    assert_eq!(verification.crc(), actual_crc);
+    assert_eq!(verification.crc, actual_crc);
     verification
         .valid(rawzip::ZipVerification {
             crc: actual_crc,

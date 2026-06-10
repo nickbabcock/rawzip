@@ -279,7 +279,7 @@ where
         self.crc = crc32_chunk(&buf[..read], self.crc);
         self.size += read as u64;
 
-        if read == 0 || self.size >= self.verifier.size() {
+        if read == 0 || self.size >= self.verifier.uncompressed_size {
             self.verifier
                 .valid(ZipVerification {
                     crc: self.crc,
@@ -786,31 +786,21 @@ pub struct ZipVerification {
 }
 
 impl ZipVerification {
-    /// Returns the expected CRC32 checksum.
-    pub fn crc(&self) -> u32 {
-        self.crc
-    }
-
-    /// Returns the expected uncompressed size.
-    pub fn size(&self) -> u64 {
-        self.uncompressed_size
-    }
-
     /// Validates the size and CRC of the entry.
     ///
     /// Returns an error if either the size or the CRC does not match.
     pub fn valid(&self, rhs: ZipVerification) -> Result<(), Error> {
-        if self.size() != rhs.size() {
+        if self.uncompressed_size != rhs.uncompressed_size {
             return Err(Error::from(ErrorKind::InvalidSize {
-                expected: self.size(),
-                actual: rhs.size(),
+                expected: self.uncompressed_size,
+                actual: rhs.uncompressed_size,
             }));
         }
 
-        if self.crc() != rhs.crc() {
+        if self.crc != rhs.crc {
             return Err(Error::from(ErrorKind::InvalidChecksum {
-                expected: self.crc(),
-                actual: rhs.crc(),
+                expected: self.crc,
+                actual: rhs.crc,
             }));
         }
 
