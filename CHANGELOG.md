@@ -24,7 +24,9 @@ The reason is to prevent breaking changes in the future by properly modeling unk
     - 18: Lz77 -> Terse (IBM TERSE new)
     - 19: add Lz77 (IBM LZ77 z Architecture)
 - Remove accidentally exposed (and unused) `StackVecIter`
-- Remove redundant getters on `ZipVerification` 
+- Remove redundant getters on `ZipVerification`
+- Un-deprecate `ZipSliceArchive::into_reader`, now constrained to `T: ReaderAt`
+- Rename `ZipSliceArchive::into_zip_archive` to `into_cursor_archive`
 
 ### Performance
 
@@ -35,9 +37,10 @@ The reason is to prevent breaking changes in the future by properly modeling unk
 ### Features and Changes
 
 - Preserve trailing slash in directories when normalization required
-- Implement ReaderAt for unsized `[u8]` slice
+- Implement ReaderAt for unsized `[u8]` slice, unlocking `ReaderAt` for `Box<[u8]>`, `Arc<[u8]>`, and `Rc<[u8]>`
 - Implement ReaderAt for `Cow<[u8]>`
 - Verifying readers now unconditionally verify all CRCs values (similar to other zip libraries) instead of treating a CRC value of 0 as special (like go's) signal to skip verification.
+- Add `From<ZipSliceArchive<impl ReaderAt>> for ZipArchive<R>`
 - Fill out implementation of `rawzip::Error::source`
 - Raise minimum supported Rust version (MSRV) to 1.85 and move to the 2024 edition
 
