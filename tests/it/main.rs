@@ -3,7 +3,7 @@ use rawzip::extra_fields::ExtraFieldId;
 use rawzip::time::{LocalDateTime, UtcDateTime, ZipDateTimeKind};
 use rawzip::{Error, ErrorKind, ZipArchive};
 use std::fs::File;
-use std::io::{Cursor, Read};
+use std::io::{Cursor, Read, Seek, SeekFrom};
 use std::path::Path;
 
 mod encryption_tests;
@@ -937,6 +937,72 @@ fn zip_integration_test_custom_as_ref() {
         count += 1;
     }
     assert_eq!(count, 1);
+}
+
+#[test]
+fn zip_slice_archive_get_ref_and_into_inner() {
+    #[derive(Debug, PartialEq, Eq)]
+    struct MyBuffer {
+        data: Vec<u8>,
+    }
+
+    impl AsRef<[u8]> for MyBuffer {
+        fn as_ref(&self) -> &[u8] {
+            &self.data
+        }
+    }
+
+    let data = std::fs::read("assets/zip64.zip").unwrap();
+    let original = MyBuffer { data: data.clone() };
+    let archive = rawzip::ZipArchive::from_slice(MyBuffer { data }).unwrap();
+
+    // Borrow the concrete owner without consuming the archive.
+    assert_eq!(archive.get_ref(), &original);
+    // The archive remains usable after borrowing.
+    assert_eq!(archive.entries_hint(), 1);
+
+    // Recover the original owner.
+    let recovered = archive.into_inner();
+    assert_eq!(recovered, original);
+}
+
+#[test]
+fn zip_archive_get_mut() {
+    // test-prefix.zip carries a non-zip prefix ahead of the zip payload.
+    let data = std::fs::read("assets/test-prefix.zip").unwrap();
+    let mut buffer = vec![0u8; rawzip::RECOMMENDED_BUFFER_SIZE];
+    let mut archive = rawzip::ZipArchive::from_slice(data)
+        .unwrap()
+        .into_cursor_archive();
+
+    // The prelude length is the smallest local header offset
+    let count_entries = |archive: &rawzip::ZipArchive<_>, buffer: &mut [u8]| {
+        let mut entries = archive.entries(buffer);
+        let (mut prelude_len, mut count) = (u64::MAX, 0u64);
+        while let Some(entry) = entries.next_entry().unwrap() {
+            prelude_len = prelude_len.min(entry.local_header_offset());
+            count += u64::from(!entry.is_dir());
+        }
+        (prelude_len, count)
+    };
+
+    let (prelude_len, count) = count_entries(&archive, &mut buffer);
+    assert_eq!(count, 2);
+
+    // Read the prelude
+    archive.get_mut().seek(SeekFrom::Start(0)).unwrap();
+    let mut prelude = vec![0u8; prelude_len as usize];
+    archive.get_mut().read_exact(&mut prelude).unwrap();
+    assert_eq!(
+        std::str::from_utf8(&prelude),
+        Ok("prefix that could be an executable jar file")
+    );
+    let mut signature = [0u8; 4];
+    archive.get_mut().read_exact(&mut signature).unwrap();
+    assert_eq!(&signature, b"PK\x03\x04");
+
+    // Double check that we can still see every entry
+    assert_eq!(count_entries(&archive, &mut buffer), (prelude_len, 2));
 }
 
 #[quickcheck]
