@@ -235,6 +235,13 @@ impl ReaderAt for Vec<u8> {
     }
 }
 
+impl ReaderAt for std::borrow::Cow<'_, [u8]> {
+    #[inline]
+    fn read_at(&self, buf: &mut [u8], offset: u64) -> std::io::Result<usize> {
+        self.as_ref().read_at(buf, offset)
+    }
+}
+
 impl<T: ReaderAt + ?Sized> ReaderAt for Arc<T> {
     #[inline]
     fn read_at(&self, buf: &mut [u8], offset: u64) -> std::io::Result<usize> {
@@ -412,6 +419,17 @@ mod tests {
         let box_reader = Box::new(data.clone());
         test_reader_at_impl(&*box_reader, data.len());
         test_reader_at_impl(box_reader, data.len());
+    }
+
+    #[test]
+    fn test_cow_implementations() {
+        let data = TEST_DATA.to_vec();
+
+        // Borrowed variant
+        test_reader_at_impl(std::borrow::Cow::Borrowed(TEST_DATA), data.len());
+
+        // Owned variant
+        test_reader_at_impl(std::borrow::Cow::<[u8]>::Owned(data.clone()), data.len());
     }
 
     #[test]
