@@ -2,7 +2,7 @@
 
 The bad news is that this is a breaking change.
 
-The good news is that the breaking changes are minimal or esoteric. The biggest thing will be the deprecation of the enum:
+The good news is that rawzip is still the same low-level, bring your own dependencies that you know and love. The breaking changes are minimal or esoteric. The biggest thing will be the deprecation of the enum:
 
 ```rust
 CompressionMethod::Deflate
