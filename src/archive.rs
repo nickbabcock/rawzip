@@ -67,11 +67,14 @@ impl<T: AsRef<[u8]>> ZipSliceArchive<T> {
         }
     }
 
-    /// Returns the byte slice that represents the zip file.
-    ///
-    /// This will include the entire input slice.
-    pub fn as_bytes(&self) -> &[u8] {
-        self.data.as_ref()
+    /// Returns a reference to the underlying data.
+    pub fn get_ref(&self) -> &T {
+        &self.data
+    }
+
+    /// Consumes this archive and returns the underlying data.
+    pub fn into_inner(self) -> T {
+        self.data
     }
 
     /// Returns a hint for the total number of entries in the archive.
@@ -422,6 +425,14 @@ impl<R> ZipArchive<R> {
     /// Returns a reference to the underlying reader.
     pub fn get_ref(&self) -> &R {
         &self.reader
+    }
+
+    /// Returns a mutable reference to the underlying reader.
+    ///
+    /// This is in contrast to [`ZipSliceArchive`], which cannot safely expose
+    /// mutable access, as it relies on offsets and direct indexing.
+    pub fn get_mut(&mut self) -> &mut R {
+        &mut self.reader
     }
 
     /// Consumes this archive and returns the underlying reader.
