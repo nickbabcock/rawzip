@@ -6,6 +6,7 @@ use std::fs::File;
 use std::io::{Cursor, Read};
 use std::path::Path;
 
+mod encryption_tests;
 mod extra_data_zip_tests;
 mod extra_fields_test;
 mod false_signature_tests;
