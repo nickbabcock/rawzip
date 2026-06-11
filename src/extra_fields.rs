@@ -36,6 +36,7 @@ impl ExtraFieldId {
     pub const INFO_ZIP_UNIX_ORIGINAL: Self = Self(0x5855);
     pub const INFO_ZIP_UNIX: Self = Self(0x7855);
     pub const INFO_ZIP_UNIX_UID_GID: Self = Self(0x7875);
+    pub const AES: Self = Self(0x9901);
     pub const JAVA_JAR: Self = Self(0xCAFE);
     pub const ANDROID_ZIP_ALIGNMENT: Self = Self(0xD935);
     pub const MACINTOSH: Self = Self(0x07c8);
