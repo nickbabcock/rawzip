@@ -1,5 +1,44 @@
 ## Unreleased
 
+The bad news is that this is a breaking change.
+
+The good news is that the breaking changes are minimal or esoteric. The biggest thing will be the deprecation of the enum:
+
+```rust
+CompressionMethod::Deflate
+```
+
+in favor of associated constants:
+
+```rust
+CompressionMethod::DEFLATE
+```
+
+The reason is to prevent breaking changes in the future by properly modeling unknown compression methods that may be defined in future spec revisions. PR (#132)(https://github.com/nickbabcock/rawzip/pull/132) 
+
+### Breaking Changes
+
+- Fix incorrect compression methods:
+    - 10: Terse -> DclImplode (PKWARE DCL Imploding, old IBM TERSE)
+    - 16: add Cmpsc (IBM z/OS CMPSC Compression)
+    - 18: Lz77 -> Terse (IBM TERSE new)
+    - 19: add Lz77 (IBM LZ77 z Architecture)
+- Remove accidentally exposed (and unused) `StackVecIter`
+- Remove redundant getters on `ZipVerification` 
+
+### Performance
+
+- CRC calculation thoughput improvement of 10%
+- Improve end of central directory (EOCD) detection by 2-8x with SWAR detection
+- Adopt adaptive window scanning for (EOCD) for Read implementations starting at 1 KiB for a 20x speedup 
+
+### Features and Changes
+
+- Preserve trailing slash in directories when normalization required
+- Implement ReaderAt for unsized `[u8]` slice
+- Implement ReaderAt for `Cow<[u8]>`
+- Verifying readers now unconditionally verify all CRCs values (similar to other zip libraries) instead of treating a CRC value of 0 as special (like go's) signal to skip verification.
+- Fill out implementation of `rawzip::Error::source`
 - Raise minimum supported Rust version (MSRV) to 1.85 and move to the 2024 edition
 
 ## v0.4.4 - March 9th, 2026
