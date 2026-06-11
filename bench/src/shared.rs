@@ -78,7 +78,7 @@ pub fn setup_reader_entries_fixture(entry_count: usize) -> ReaderEntriesFixture 
     let zip_data = create_test_zip(entry_count);
     let archive = rawzip::ZipArchive::from_slice(zip_data)
         .unwrap()
-        .into_zip_archive();
+        .into_cursor_archive();
 
     ReaderEntriesFixture {
         archive,
