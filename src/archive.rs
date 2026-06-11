@@ -113,24 +113,17 @@ impl<T: AsRef<[u8]>> ZipSliceArchive<T> {
         ZipStr::new(&data[comment_start..comment_start + comment_len])
     }
 
-    /// Converts the [`ZipSliceArchive`] into a general [`ZipArchive`].
-    ///
-    /// This is useful for unifying code that might handle both slice-based
-    /// and reader-based archives.
-    #[deprecated(note = "Use `ZipSliceArchive::into_zip_archive` instead")]
-    pub fn into_reader(self) -> ZipArchive<T> {
-        ZipArchive {
-            reader: self.data,
-            eocd: self.eocd,
-        }
-    }
-
-    /// Converts the [`ZipSliceArchive`] into a general [`ZipArchive`].
+    /// Converts the [`ZipSliceArchive`] into a general [`ZipArchive`] by
+    /// wrapping the data in a [`std::io::Cursor`].
     ///
     /// This is useful for unifying code that might handle both slice-based and
     /// reader-based archives. The data is wrapped in a [`std::io::Cursor`] to
     /// provide the [`ReaderAt`] implementation needed for [`ZipArchive`].
-    pub fn into_zip_archive(self) -> ZipArchive<std::io::Cursor<T>> {
+    ///
+    /// This is only needed for `AsRef<[u8]>` types that do not themselves
+    /// implement [`ReaderAt`], such as a memory-mapped file (`memmap2::Mmap`).
+    /// Otherwise prefer the zero-cost [`ZipSliceArchive::into_reader`].
+    pub fn into_cursor_archive(self) -> ZipArchive<std::io::Cursor<T>> {
         ZipArchive {
             reader: std::io::Cursor::new(self.data),
             eocd: self.eocd,
@@ -603,6 +596,29 @@ where
             body_offset,
             body_end_offset,
         })
+    }
+}
+
+impl<T: ReaderAt> ZipSliceArchive<T> {
+    /// Converts the [`ZipSliceArchive`] into a general [`ZipArchive`].
+    ///
+    /// This is useful for unifying code that might handle both slice-based and
+    /// reader-based archives. Because the underlying data already implements
+    /// [`ReaderAt`], the conversion is zero-cost.
+    pub fn into_reader(self) -> ZipArchive<T> {
+        ZipArchive::from(self)
+    }
+}
+
+impl<R> From<ZipSliceArchive<R>> for ZipArchive<R>
+where
+    R: ReaderAt,
+{
+    fn from(slice_archive: ZipSliceArchive<R>) -> Self {
+        ZipArchive {
+            reader: slice_archive.data,
+            eocd: slice_archive.eocd,
+        }
     }
 }
 

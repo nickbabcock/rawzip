@@ -881,9 +881,20 @@ fn catch_incorrect_crc_without_data_descriptor() {
 #[test]
 fn zip_integration_tests_vec() {
     let data = std::fs::read("assets/zip64.zip").unwrap();
-    let archive = rawzip::ZipArchive::from_slice(data).unwrap();
+
+    // `Vec<u8>` implements `ReaderAt`, so it can be converted directly without a
+    // `Cursor` wrapper, both via `into_reader` and the `From`/`Into` impls.
+    let archive = rawzip::ZipArchive::from_slice(data.clone()).unwrap();
     assert_eq!(archive.comment().as_bytes(), b"");
-    let reader = archive.into_zip_archive();
+    let reader: rawzip::ZipArchive<Vec<u8>> = archive.into_reader();
+    assert_entry_count(reader, 1);
+
+    let archive = rawzip::ZipArchive::from_slice(data).unwrap();
+    let reader = rawzip::ZipArchive::from(archive);
+    assert_entry_count(reader, 1);
+}
+
+fn assert_entry_count<R: rawzip::ReaderAt>(reader: rawzip::ZipArchive<R>, expected: usize) {
     let mut buf = vec![0u8; rawzip::RECOMMENDED_BUFFER_SIZE];
     let mut entries = reader.entries(&mut buf);
     let mut count = 0;
@@ -893,7 +904,7 @@ fn zip_integration_tests_vec() {
         }
         count += 1;
     }
-    assert_eq!(count, 1);
+    assert_eq!(count, expected);
 }
 
 /// This test is to ensure that the ZipArchive can be created from a custom type
@@ -914,7 +925,7 @@ fn zip_integration_test_custom_as_ref() {
     let my_buffer = MyBuffer { data };
     let archive = rawzip::ZipArchive::from_slice(&my_buffer).unwrap();
     assert_eq!(archive.comment().as_bytes(), b"");
-    let reader = archive.into_zip_archive();
+    let reader = archive.into_cursor_archive();
     let mut buf = vec![0u8; rawzip::RECOMMENDED_BUFFER_SIZE];
     let mut entries = reader.entries(&mut buf);
     let mut count = 0;
