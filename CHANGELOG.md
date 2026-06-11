@@ -36,6 +36,7 @@ The reason is to prevent breaking changes in the future by properly modeling unk
 
 ### Features and Changes
 
+- Add `ExtraFieldId::AES` and an integration test demonstrating how to read AES encrypted zip files
 - Preserve trailing slash in directories when normalization required
 - Implement ReaderAt for unsized `[u8]` slice, unlocking `ReaderAt` for `Box<[u8]>`, `Arc<[u8]>`, and `Rc<[u8]>`
 - Implement ReaderAt for `Cow<[u8]>`
