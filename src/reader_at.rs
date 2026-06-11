@@ -192,21 +192,21 @@ where
     }
 }
 
-impl<T: ReaderAt> ReaderAt for &'_ T {
+impl<T: ReaderAt + ?Sized> ReaderAt for &'_ T {
     #[inline]
     fn read_at(&self, buf: &mut [u8], offset: u64) -> std::io::Result<usize> {
         (*self).read_at(buf, offset)
     }
 }
 
-impl<T: ReaderAt> ReaderAt for &'_ mut T {
+impl<T: ReaderAt + ?Sized> ReaderAt for &'_ mut T {
     #[inline]
     fn read_at(&self, buf: &mut [u8], offset: u64) -> std::io::Result<usize> {
         (**self).read_at(buf, offset)
     }
 }
 
-impl ReaderAt for &[u8] {
+impl ReaderAt for [u8] {
     #[inline]
     fn read_at(&self, buf: &mut [u8], offset: u64) -> std::io::Result<usize> {
         let skip = self.len().min(offset as usize);
@@ -410,6 +410,26 @@ mod tests {
 
         // Test Box<Vec<u8>>
         let box_reader = Box::new(data.clone());
+        test_reader_at_impl(&*box_reader, data.len());
+        test_reader_at_impl(box_reader, data.len());
+    }
+
+    #[test]
+    fn test_unsized_slice_smart_pointer_implementations() {
+        let data = TEST_DATA.to_vec();
+
+        // Test Arc<[u8]>
+        let arc_reader: Arc<[u8]> = Arc::from(data.clone());
+        test_reader_at_impl(&*arc_reader, data.len());
+        test_reader_at_impl(arc_reader, data.len());
+
+        // Test Rc<[u8]>
+        let rc_reader: Rc<[u8]> = Rc::from(data.clone());
+        test_reader_at_impl(&*rc_reader, data.len());
+        test_reader_at_impl(rc_reader, data.len());
+
+        // Test Box<[u8]>
+        let box_reader: Box<[u8]> = Box::from(data.as_slice());
         test_reader_at_impl(&*box_reader, data.len());
         test_reader_at_impl(box_reader, data.len());
     }
