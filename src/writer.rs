@@ -1220,6 +1220,16 @@ mod tests {
     }
 
     #[test]
+    fn test_new_dir_slow_path_preserves_trailing_slash() {
+        // A directory name that trips the normalization slow path (here `//`)
+        // must still be recognized as a directory rather than rejected.
+        let mut output = Cursor::new(Vec::new());
+        let mut archive = ZipArchiveWriter::new(&mut output);
+        archive.new_dir("a//b/").create().unwrap();
+        archive.finish().unwrap();
+    }
+
+    #[test]
     fn test_builder_with_offset_and_capacity() {
         let mut output = Cursor::new(Vec::new());
 
