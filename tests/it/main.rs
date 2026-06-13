@@ -1095,8 +1095,9 @@ fn test_filename_mismatch_handling() {
 
     let slice_wayfinder = slice_header.wayfinder();
     let slice_entry = slice_archive.get_entry(slice_wayfinder).unwrap();
-    let slice_local_filename = slice_entry.file_path();
-    assert_eq!(slice_local_filename.as_ref(), b"safe_file.txt",);
+
+    let slice_local_header = slice_entry.local_header();
+    assert_eq!(slice_local_header, local_header);
 }
 
 #[test]

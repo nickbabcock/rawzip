@@ -41,7 +41,10 @@ fn test_filename_utf8_flag(#[case] filename: &str, #[case] should_have_utf8_flag
     let entry = archive.entries().next_entry().unwrap().unwrap();
     assert_eq!(entry.flags().is_utf8(), should_have_utf8_flag);
     let slice_entry = archive.get_entry(entry.wayfinder()).unwrap();
-    assert_eq!(slice_entry.flags().is_utf8(), should_have_utf8_flag);
+    assert_eq!(
+        slice_entry.local_header().flags().is_utf8(),
+        should_have_utf8_flag
+    );
 }
 
 /// Test directory UTF-8 flag behavior with various directory names

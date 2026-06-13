@@ -375,8 +375,8 @@ fn test_infozip_extended_timestamps_slice() {
     // Get local header extra fields
     let wayfinder = entry.wayfinder();
     let zip_entry = archive.get_entry(wayfinder).unwrap();
-    let local_fields = zip_entry.extra_fields();
-    assert_extend_time_extra_field_difference(entry.extra_fields(), local_fields);
+    let local_header = zip_entry.local_header();
+    assert_extend_time_extra_field_difference(entry.extra_fields(), local_header.extra_fields());
 }
 
 fn assert_extend_time_extra_field_difference(mut central: ExtraFields, mut local: ExtraFields) {

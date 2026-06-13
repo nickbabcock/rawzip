@@ -57,9 +57,9 @@ fn fuzz_reader_zip_archive(data: &[u8], buf: &mut Vec<u8>) -> Result<(), rawzip:
             continue;
         };
 
-        let _local_header = ent
-            .local_header(extra_data_buf)
-            .expect("to be able to parse again");
+        let Ok(_local_header) = ent.local_header(extra_data_buf) else {
+            continue;
+        };
         let _range = ent.compressed_data_range();
         match entry.compression_method() {
             rawzip::CompressionMethod::Store => {
@@ -103,7 +103,8 @@ fn fuzz_slice_zip_archive(data: &[u8]) -> Result<(), rawzip::Error> {
             continue;
         };
 
-        let _extra_fields = ent.extra_fields();
+        let _local_header = ent.local_header();
+        let _extra_fields = _local_header.extra_fields();
         let _range = ent.compressed_data_range();
         match entry.compression_method() {
             rawzip::CompressionMethod::Store => {
