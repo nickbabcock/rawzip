@@ -16,6 +16,7 @@ const ZIP64_VERSION_NEEDED: u16 = 45; // 4.5
 const ZIP64_EOCD_SIZE: usize = 56;
 
 // General purpose bit flags
+const FLAG_ENCRYPTED: u16 = 0x01; // bit 0: file is encrypted
 const FLAG_DATA_DESCRIPTOR: u16 = 0x08; // bit 3: data descriptor present
 const FLAG_UTF8_ENCODING: u16 = 0x800; // bit 11: UTF-8 encoding flag (EFS)
 
@@ -270,6 +271,7 @@ pub struct ZipFileBuilder<'archive, 'name, W> {
     extra_fields: ExtraFieldsContainer,
     crc32_option: Crc32Option,
     file_comment: Vec<u8>,
+    encrypted: bool,
 }
 
 impl<'archive, W> ZipFileBuilder<'archive, '_, W>
@@ -411,6 +413,20 @@ where
         Ok(self)
     }
 
+    /// Marks the file entry as encrypted by setting file headers.
+    ///
+    /// rawzip **DOES NOT** perform encryption itself.
+    ///
+    /// The caller remains responsible for writing the encrypted payload (for
+    /// WinZip AES: the salt, password verifier, ciphertext, and authentication
+    /// code) and for any associated extra fields.
+    #[must_use]
+    #[inline]
+    pub fn encrypted(mut self, encrypted: bool) -> Self {
+        self.encrypted = encrypted;
+        self
+    }
+
     /// Sets the CRC32 calculation option for the file entry.
     ///
     /// By default, CRC32 is calculated automatically from the data. Use this
@@ -491,6 +507,7 @@ where
             unix_permissions: self.unix_permissions,
             extra_fields: self.extra_fields,
             file_comment: self.file_comment,
+            encrypted: self.encrypted,
         };
         let entry_writer = self.archive.new_file_with_options(self.name, options)?;
 
@@ -567,6 +584,7 @@ where
             unix_permissions: self.unix_permissions,
             extra_fields: self.extra_fields,
             file_comment: self.file_comment,
+            encrypted: false,
         };
         self.archive.new_dir_with_options(self.name, options)
     }
@@ -739,6 +757,7 @@ where
             extra_fields: ExtraFieldsContainer::new(),
             crc32_option: Crc32Option::default(),
             file_comment: Vec::new(),
+            encrypted: false,
         }
     }
 
@@ -762,6 +781,9 @@ where
             flags |= FLAG_UTF8_ENCODING;
         } else {
             flags &= !FLAG_UTF8_ENCODING;
+        }
+        if options.encrypted {
+            flags |= FLAG_ENCRYPTED;
         }
 
         // Store the name bytes in the central buffer
@@ -1266,6 +1288,7 @@ struct ZipEntryOptions {
     unix_permissions: Option<u32>,
     extra_fields: ExtraFieldsContainer,
     file_comment: Vec<u8>,
+    encrypted: bool,
 }
 
 #[cfg(test)]
