@@ -617,7 +617,7 @@ where
             options.extra_fields.add_field(
                 ExtraFieldId::EXTENDED_TIMESTAMP,
                 &data,
-                Header::CENTRAL,
+                Header::default(),
             )?;
         }
 

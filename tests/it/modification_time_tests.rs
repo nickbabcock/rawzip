@@ -107,6 +107,9 @@ fn test_no_modification_time_defaults_to_zero() {
 #[test]
 fn test_extended_timestamp_format_present() {
     let datetime = UtcDateTime::from_components(2023, 6, 15, 14, 30, 45, 0).unwrap();
+    let mut expected_timestamp = [0; 5];
+    expected_timestamp[0] = 1;
+    expected_timestamp[1..].copy_from_slice(&(datetime.to_unix() as u32).to_le_bytes());
     let mut output = Vec::new();
 
     // Create archive with modification time
@@ -124,15 +127,23 @@ fn test_extended_timestamp_format_present() {
         archive.finish().unwrap();
     }
 
-    // Check that the extended timestamp extra field is present
-    // Extended timestamp field ID is 0x5455
-    let extended_timestamp_id_bytes = 0x5455u16.to_le_bytes();
-    let contains_extended_timestamp = output.windows(2).any(|w| w == extended_timestamp_id_bytes);
+    let archive = ZipArchive::from_slice(&output).unwrap();
+    let mut entries = archive.entries();
+    let entry = entries.next_entry().unwrap().unwrap();
+    let central_timestamp = entry
+        .extra_fields()
+        .find(|(id, _)| *id == ExtraFieldId::EXTENDED_TIMESTAMP)
+        .unwrap();
 
-    assert!(
-        contains_extended_timestamp,
-        "Extended timestamp extra field should be present when modification time is provided"
-    );
+    let local_entry = archive.get_entry(entry.wayfinder()).unwrap();
+    let local_timestamp = local_entry
+        .local_header()
+        .extra_fields()
+        .find(|(id, _)| *id == ExtraFieldId::EXTENDED_TIMESTAMP)
+        .unwrap();
+
+    assert_eq!(local_timestamp, central_timestamp);
+    assert_eq!(local_timestamp.1, expected_timestamp);
 }
 
 /// Test that no extended timestamp format is used when no modification time is provided
