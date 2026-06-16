@@ -1102,6 +1102,45 @@ fn test_filename_mismatch_handling() {
 }
 
 #[test]
+fn test_local_header_declared_fields_match_central_directory() {
+    let data = std::fs::read("assets/crc32-not-streamed.zip").unwrap();
+
+    let slice_archive = ZipArchive::from_slice(&data).unwrap();
+    let mut entries = slice_archive.entries();
+    let entry = entries.next_entry().unwrap().unwrap();
+    let slice_local_header = slice_archive
+        .get_entry(entry.wayfinder())
+        .unwrap()
+        .local_header();
+
+    assert!(!slice_local_header.flags().has_data_descriptor());
+    assert_eq!(
+        slice_local_header.compression_method(),
+        entry.compression_method()
+    );
+    assert_eq!(slice_local_header.crc32(), entry.crc32());
+    assert_eq!(
+        slice_local_header.compressed_size_hint(),
+        entry.compressed_size_hint()
+    );
+    assert_eq!(
+        slice_local_header.uncompressed_size_hint(),
+        entry.uncompressed_size_hint()
+    );
+    assert_eq!(slice_local_header.last_modified(), entry.last_modified());
+
+    let reader_archive = ZipArchive::from_slice(&data).unwrap().into_reader();
+    let mut buffer = vec![0u8; rawzip::RECOMMENDED_BUFFER_SIZE];
+    let mut reader_entries = reader_archive.entries(&mut buffer);
+    let reader_entry = reader_entries.next_entry().unwrap().unwrap();
+    let reader_zip_entry = reader_archive.get_entry(reader_entry.wayfinder()).unwrap();
+    let mut local_buffer = vec![0u8; rawzip::RECOMMENDED_BUFFER_SIZE];
+    let reader_local_header = reader_zip_entry.local_header(&mut local_buffer).unwrap();
+
+    assert_eq!(reader_local_header, slice_local_header);
+}
+
+#[test]
 fn test_central_directory_offset_consistency() {
     let test_files = [
         "test.zip",

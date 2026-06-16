@@ -281,12 +281,14 @@ impl<'a> ZipSliceEntry<'a> {
         let filename_start = ZipLocalFileHeaderFixed::SIZE;
         let filename_end = filename_start + file_name_len;
         let extra_field_end = filename_end + extra_field_len;
+        let (compressed_size, uncompressed_size) =
+            local_header_size_hints(&header, &self.data[filename_end..extra_field_end]);
         ZipLocalFileHeader {
-            flags: header.flags,
-            last_mod_time: header.last_mod_time,
-            last_mod_date: header.last_mod_date,
+            fixed: header,
+            compressed_size,
+            uncompressed_size,
             file_path: ZipFilePath::from_bytes(&self.data[filename_start..filename_end]),
-            extra_fields: ExtraFields::new(&self.data[filename_end..extra_field_end]),
+            extra_field: &self.data[filename_end..extra_field_end],
         }
     }
 }
@@ -818,12 +820,16 @@ where
             .read_exact_at(variable_data, variable_data_offset)?;
 
         let (filename_data, extra_field_data) = variable_data.split_at(file_name_len);
+
+        let (compressed_size, uncompressed_size) =
+            local_header_size_hints(&local_header_fixed, extra_field_data);
+
         Ok(ZipLocalFileHeader {
-            flags: local_header_fixed.flags,
-            last_mod_time: local_header_fixed.last_mod_time,
-            last_mod_date: local_header_fixed.last_mod_date,
+            fixed: local_header_fixed,
+            compressed_size,
+            uncompressed_size,
             file_path: ZipFilePath::from_bytes(filename_data),
-            extra_fields: ExtraFields::new(extra_field_data),
+            extra_field: extra_field_data,
         })
     }
 }
@@ -970,11 +976,11 @@ where
 /// header data is useful for validation, security analysis, and forensic purposes.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ZipLocalFileHeader<'a> {
-    flags: EntryFlags,
-    last_mod_time: u16,
-    last_mod_date: u16,
+    fixed: ZipLocalFileHeaderFixed,
+    compressed_size: u64,
+    uncompressed_size: u64,
     file_path: ZipFilePath<RawPath<'a>>,
-    extra_fields: ExtraFields<'a>,
+    extra_field: &'a [u8],
 }
 
 impl<'a> ZipLocalFileHeader<'a> {
@@ -984,7 +990,7 @@ impl<'a> ZipLocalFileHeader<'a> {
     /// [`EntryFlags`] for the individual flag accessors.
     #[inline]
     pub fn flags(&self) -> EntryFlags {
-        self.flags
+        self.fixed.flags
     }
 
     /// Returns the file path from the local file header.
@@ -1001,7 +1007,53 @@ impl<'a> ZipLocalFileHeader<'a> {
     /// [`last_modified_dos`](ZipFileHeaderRecord::last_modified_dos).
     #[inline]
     pub fn last_modified_dos(&self) -> DosDateTime {
-        DosDateTime::new(self.last_mod_time, self.last_mod_date)
+        DosDateTime::new(self.fixed.last_mod_time, self.fixed.last_mod_date)
+    }
+
+    /// Returns the compression method declared in the local file header.
+    #[inline]
+    pub fn compression_method(&self) -> CompressionMethod {
+        self.fixed.compression_method.as_method()
+    }
+
+    /// Returns the last modification date and time declared in the local file header.
+    ///
+    /// Extended timestamps in the local header's extra fields are preferred
+    /// when present.
+    #[inline]
+    pub fn last_modified(&self) -> ZipDateTimeKind {
+        extract_best_timestamp(
+            self.extra_fields(),
+            self.fixed.last_mod_time,
+            self.fixed.last_mod_date,
+        )
+    }
+
+    /// The CRC32 checksum declared in the local file header.
+    ///
+    /// **WARNING**: this value is zero when written by a streaming writer,
+    /// and may otherwise differ from the central directory record's value.
+    #[inline]
+    pub fn crc32(&self) -> u32 {
+        self.fixed.crc32
+    }
+
+    /// The purported number of bytes of the compressed data from the local file header.
+    ///
+    /// **WARNING**: this value is zero when written by a streaming writer,
+    /// and may otherwise differ from the central directory record's value.
+    #[inline]
+    pub fn compressed_size_hint(&self) -> u64 {
+        self.compressed_size
+    }
+
+    /// The purported number of bytes of the uncompressed data from the local file header.
+    ///
+    /// **WARNING**: this value is zero when written by a streaming writer,
+    /// and may otherwise differ from the central directory record's value.
+    #[inline]
+    pub fn uncompressed_size_hint(&self) -> u64 {
+        self.uncompressed_size
     }
 
     /// Returns an iterator over the extra fields from the local file header.
@@ -1011,8 +1063,39 @@ impl<'a> ZipLocalFileHeader<'a> {
     /// central directory entry.
     #[inline]
     pub fn extra_fields(&self) -> ExtraFields<'a> {
-        self.extra_fields
+        ExtraFields::new(self.extra_field)
     }
+}
+
+fn local_header_size_hints(header: &ZipLocalFileHeaderFixed, extra_field: &[u8]) -> (u64, u64) {
+    let mut compressed_size = u64::from(header.compressed_size);
+    let mut uncompressed_size = u64::from(header.uncompressed_size);
+
+    if header.compressed_size == u32::MAX || header.uncompressed_size == u32::MAX {
+        for (field_id, field_data) in ExtraFields::new(extra_field) {
+            if field_id != ExtraFieldId::ZIP64 {
+                continue;
+            }
+
+            let mut field = field_data;
+            if header.uncompressed_size == u32::MAX {
+                if let Some(v) = field.get(..8).map(le_u64) {
+                    uncompressed_size = v;
+                    field = &field[8..];
+                }
+            }
+
+            if header.compressed_size == u32::MAX {
+                if let Some(v) = field.get(..8).map(le_u64) {
+                    compressed_size = v;
+                }
+            }
+
+            break;
+        }
+    }
+
+    (compressed_size, uncompressed_size)
 }
 
 /// The data descriptor trailing an entry's compressed data.
@@ -1313,7 +1396,7 @@ impl Zip64EndOfCentralDirectoryRecord {
 }
 
 /// A numeric identifier for a compression method used in a Zip archive.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct CompressionMethodId(u16);
 
 impl CompressionMethodId {
@@ -1854,7 +1937,7 @@ impl ZipArchiveEntryWayfinder {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) struct ZipLocalFileHeaderFixed {
     pub(crate) signature: u32,
     pub(crate) version_needed: u16,
