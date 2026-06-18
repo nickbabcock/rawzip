@@ -23,6 +23,8 @@ The reason is to prevent breaking changes in the future by properly modeling unk
     - 16: add Cmpsc (IBM z/OS CMPSC Compression)
     - 18: Lz77 -> Terse (IBM TERSE new)
     - 19: add Lz77 (IBM LZ77 z Architecture)
+- Remove `ReaderAt` type parameter on `ZipVerifier` 
+- `ZipReader::claim_verifier` borrows self and is infallible 
 - Remove accidentally exposed (and unused) `StackVecIter`
 - Remove redundant getters on `ZipVerification`
 - Remove `ZipSliceArchive::as_bytes` as `get_ref` is strictly better
@@ -37,6 +39,8 @@ The reason is to prevent breaking changes in the future by properly modeling unk
 
 ### Features and Changes
 
+- Built-in CRC/size verification is now central-directory authoritative and never reads the trailing data descriptor to bring rawzip in line with other zip file libraries
+- Add functions for extracting zip entry data descriptors for those that want to cross validate values 
 - Add `ExtraFieldId::AES` and an integration test demonstrating how to read AES encrypted zip files
 - Add `ZipSliceArchive::get_ref` and  `into_inner` to borrow or recover the underlying data
 - Add `Add ZipArchive::get_mut` to mutably access the reader
