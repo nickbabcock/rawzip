@@ -152,22 +152,18 @@ impl<T: AsRef<[u8]>> ZipSliceArchive<T> {
             return Err(Error::from(ErrorKind::Eof));
         }
 
-        let (entire_entry, rest) = header.split_at(total_size as usize);
-
-        let expected_crc = if entry.has_data_descriptor {
-            DataDescriptor::parse(rest)?.crc
-        } else {
-            entry.crc
-        };
+        let (entire_entry, descriptor) = header.split_at(total_size as usize);
 
         Ok(ZipSliceEntry {
             data: entire_entry,
             verifier: ZipVerification {
-                crc: expected_crc,
+                crc: entry.crc,
                 uncompressed_size: entry.uncompressed_size_hint(),
             },
             local_header_offset: entry.local_header_offset,
             data_start_offset: header_size,
+            has_data_descriptor: entry.has_data_descriptor,
+            descriptor,
         })
     }
 }
@@ -183,6 +179,8 @@ pub struct ZipSliceEntry<'a> {
     local_header_offset: u64,
     // self.data[self.data_start_offset] is the start of compressed data
     data_start_offset: u32,
+    has_data_descriptor: bool,
+    descriptor: &'a [u8],
 }
 
 impl<'a> ZipSliceEntry<'a> {
@@ -193,11 +191,21 @@ impl<'a> ZipSliceEntry<'a> {
 
     /// Returns a verifier for the CRC and uncompressed size of the entry.
     ///
-    /// Useful when it's more practical to oneshot decompress the data,
-    /// otherwise use [`ZipSliceEntry::verifying_reader`] to stream
-    /// decompression and verification.
+    /// See [`ZipReader::claim_verifier`] for more commentary.
     pub fn claim_verifier(&self) -> ZipVerification {
         self.verifier
+    }
+
+    /// Reads the trailing [`ZipDataDescriptor`] for this entry, if present.
+    pub fn data_descriptor(&self) -> Result<Option<ZipDataDescriptor>, Error> {
+        if !self.has_data_descriptor {
+            return Ok(None);
+        }
+
+        let descriptor = DataDescriptor::parse(self.descriptor)?;
+        Ok(Some(ZipDataDescriptor {
+            crc: descriptor.crc,
+        }))
     }
 
     /// Returns a reader that wraps a decompressor and verify the size and CRC
@@ -206,12 +214,12 @@ impl<'a> ZipSliceEntry<'a> {
     where
         D: std::io::Read,
     {
-        ZipSliceVerifier {
+        ZipSliceVerifier(ZipVerifier {
             reader,
             verifier: self.verifier,
             crc: 0,
             size: 0,
-        }
+        })
     }
 
     /// Returns the byte range of the compressed data within the archive.
@@ -250,41 +258,24 @@ impl<'a> ZipSliceEntry<'a> {
     }
 }
 
-/// Verifies the wrapped reader returns the expected CRC and uncompressed size
+/// Verifies the wrapped reader returns the expected CRC and uncompressed size.
 #[derive(Debug, Clone)]
-pub struct ZipSliceVerifier<D> {
-    reader: D,
-    crc: u32,
-    size: u64,
-    verifier: ZipVerification,
-}
+pub struct ZipSliceVerifier<Decompressor>(ZipVerifier<Decompressor>);
 
-impl<D> ZipSliceVerifier<D> {
-    /// Consumes the `ZipSliceVerifier`, returning the underlying reader.
-    pub fn into_inner(self) -> D {
-        self.reader
+impl<Decompressor> ZipSliceVerifier<Decompressor> {
+    /// Consumes the [`ZipSliceVerifier`], returning the underlying decompressor
+    /// without verifying.
+    pub fn into_inner(self) -> Decompressor {
+        self.0.into_inner()
     }
 }
 
-impl<D> std::io::Read for ZipSliceVerifier<D>
+impl<Decompressor> std::io::Read for ZipSliceVerifier<Decompressor>
 where
-    D: std::io::Read,
+    Decompressor: std::io::Read,
 {
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
-        let read = self.reader.read(buf)?;
-        self.crc = crc32_chunk(&buf[..read], self.crc);
-        self.size += read as u64;
-
-        if read == 0 || self.size >= self.verifier.uncompressed_size {
-            self.verifier
-                .valid(ZipVerification {
-                    crc: self.crc,
-                    uncompressed_size: self.size,
-                })
-                .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
-        }
-
-        Ok(read)
+        self.0.read(buf)
     }
 }
 
@@ -659,7 +650,7 @@ where
 
     /// Returns a reader that wraps a decompressor and verify the size and CRC
     /// of the decompressed data once finished.
-    pub fn verifying_reader<D>(&self, reader: D) -> ZipVerifier<D, &'archive R>
+    pub fn verifying_reader<D>(&self, reader: D) -> ZipVerifier<D>
     where
         D: std::io::Read,
     {
@@ -667,9 +658,10 @@ where
             reader,
             crc: 0,
             size: 0,
-            archive: self.archive.get_ref(),
-            end_offset: self.body_end_offset,
-            wayfinder: self.entry,
+            verifier: ZipVerification {
+                crc: self.entry.crc,
+                uncompressed_size: self.entry.uncompressed_size_hint(),
+            },
         }
     }
 
@@ -835,53 +827,44 @@ impl ZipVerification {
     }
 }
 
-/// Verifies the checksum of the decompressed data matches the checksum listed in the zip
+/// Verifies the checksum of the decompressed data matches the checksum listed
+/// in the central directory.
 #[derive(Debug, Clone)]
-pub struct ZipVerifier<Decompressor, ReaderAt> {
+pub struct ZipVerifier<Decompressor> {
     reader: Decompressor,
     crc: u32,
     size: u64,
-    archive: ReaderAt,
-    end_offset: u64,
-    wayfinder: ZipArchiveEntryWayfinder,
+    verifier: ZipVerification,
 }
 
-impl<Decompressor, ReaderAt> ZipVerifier<Decompressor, ReaderAt> {
-    /// Consumes the [`ZipVerifier`], returning the underlying decompressor.
+impl<Decompressor> ZipVerifier<Decompressor> {
+    /// Consumes the [`ZipVerifier`], returning the underlying decompressor
+    /// without verifying.
     pub fn into_inner(self) -> Decompressor {
         self.reader
     }
 }
 
-impl<Decompressor, Reader> std::io::Read for ZipVerifier<Decompressor, Reader>
+impl<Decompressor> std::io::Read for ZipVerifier<Decompressor>
 where
     Decompressor: std::io::Read,
-    Reader: ReaderAt,
 {
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        if buf.is_empty() {
+            return Ok(0);
+        }
+
         let read = self.reader.read(buf)?;
         self.crc = crc32_chunk(&buf[..read], self.crc);
         self.size += read as u64;
 
-        if read == 0 || self.size >= self.wayfinder.uncompressed_size_hint() {
-            let crc = if self.wayfinder.has_data_descriptor {
-                DataDescriptor::read_at(&self.archive, self.end_offset).map(|x| x.crc)
-            } else {
-                Ok(self.wayfinder.crc)
-            };
-
-            crc.and_then(|crc| {
-                let expected = ZipVerification {
-                    crc,
-                    uncompressed_size: self.wayfinder.uncompressed_size_hint(),
-                };
-
-                expected.valid(ZipVerification {
+        if read == 0 || self.size >= self.verifier.uncompressed_size {
+            self.verifier
+                .valid(ZipVerification {
                     crc: self.crc,
                     uncompressed_size: self.size,
                 })
-            })
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+                .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
         }
 
         Ok(read)
@@ -899,27 +882,30 @@ impl<R> ZipReader<R>
 where
     R: ReaderAt,
 {
-    /// Returns an object that can be used to verify the size and checksum of
-    /// inflated data
+    /// Returns the expected data verification of the inflated data.
     ///
-    /// Consumes the reader, so this should be called after all data has been read from the entry.
-    ///
-    /// The function will read the data descriptor if one is expected to exist.
-    pub fn claim_verifier(self) -> Result<ZipVerification, Error> {
-        let expected_size = self.entry.uncompressed_size_hint();
+    /// Rawzip considers the central directory to be authoritative, so this
+    /// returns the CRC and uncompressed size from the central directory. If you
+    /// want to check the data descriptor instead, use
+    /// [`ZipReader::data_descriptor`] to read it.
+    pub fn claim_verifier(&self) -> ZipVerification {
+        ZipVerification {
+            crc: self.entry.crc,
+            uncompressed_size: self.entry.uncompressed_size_hint(),
+        }
+    }
 
-        let expected_crc = if self.entry.has_data_descriptor {
-            let end_offset = self.range_reader.end_offset();
-            let archive = self.range_reader.into_inner();
-            DataDescriptor::read_at(archive, end_offset).map(|x| x.crc)?
-        } else {
-            self.entry.crc
-        };
+    /// Reads the trailing [`ZipDataDescriptor`] for this entry, if present.
+    pub fn data_descriptor(&self) -> Result<Option<ZipDataDescriptor>, Error> {
+        if !self.entry.has_data_descriptor {
+            return Ok(None);
+        }
 
-        Ok(ZipVerification {
-            crc: expected_crc,
-            uncompressed_size: expected_size,
-        })
+        let descriptor =
+            DataDescriptor::read_at(self.range_reader.get_ref(), self.range_reader.end_offset())?;
+        Ok(Some(ZipDataDescriptor {
+            crc: descriptor.crc,
+        }))
     }
 }
 
@@ -962,6 +948,27 @@ impl<'a> ZipLocalFileHeader<'a> {
     /// central directory entry.
     pub fn extra_fields(&self) -> ExtraFields<'a> {
         self.extra_fields
+    }
+}
+
+/// The data descriptor trailing an entry's compressed data.
+///
+/// Obtain one via [`ZipReader::data_descriptor`] or
+/// [`ZipSliceEntry::data_descriptor`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ZipDataDescriptor {
+    crc: u32,
+}
+
+impl ZipDataDescriptor {
+    /// The CRC32 checksum of the uncompressed data as recorded in the data
+    /// descriptor.
+    ///
+    /// Can be cross-checked against the central directory CRC
+    /// ([`ZipFileHeaderRecord::crc32`]) to detect inconsistent archives.
+    #[inline]
+    pub fn crc(&self) -> u32 {
+        self.crc
     }
 }
 
