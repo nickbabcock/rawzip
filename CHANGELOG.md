@@ -30,6 +30,7 @@ The reason is to prevent breaking changes in the future by properly modeling unk
 - Remove `ZipSliceArchive::as_bytes` as `get_ref` is strictly better
 - Un-deprecate `ZipSliceArchive::into_reader`, now constrained to `T: ReaderAt`
 - Rename `ZipSliceArchive::into_zip_archive` to `into_cursor_archive`
+- Remove `MissingZip64EndOfCentralDirectory` error kind as it is no longer possible to trigger
 
 ### Performance
 
@@ -51,6 +52,8 @@ The reason is to prevent breaking changes in the future by properly modeling unk
 - Add `From<ZipSliceArchive<impl ReaderAt>> for ZipArchive<R>`
 - Fill out implementation of `rawzip::Error::source`
 - Raise minimum supported Rust version (MSRV) to 1.85 and move to the 2024 edition
+- Fix classic zip with 65536 entries failure to parse edge case
+- Fix failure to parse zip64 files that have a central directory size >= 4 GiB
 
 ## v0.4.4 - March 9th, 2026
 
