@@ -1,6 +1,7 @@
 use crate::crc::crc32_chunk;
 use crate::errors::{Error, ErrorKind};
 use crate::extra_fields::{ExtraFieldId, ExtraFields};
+use crate::headers::EntryFlags;
 use crate::mode::{
     CREATOR_FAT, CREATOR_MACOS, CREATOR_NTFS, CREATOR_UNIX, CREATOR_VFAT, EntryMode,
     msdos_mode_to_file_mode, unix_mode_to_file_mode,
@@ -255,6 +256,16 @@ impl<'a> ZipSliceEntry<'a> {
         let filename_start = ZipLocalFileHeaderFixed::SIZE;
         let filename_end = filename_start + file_name_len;
         ZipFilePath::from_bytes(&self.data[filename_start..filename_end])
+    }
+
+    /// Returns the general purpose bit flags from the local file header.
+    ///
+    /// These may differ from the central directory record's flags. See
+    /// [`EntryFlags`] for the individual flag accessors.
+    pub fn flags(&self) -> EntryFlags {
+        let header =
+            ZipLocalFileHeaderFixed::parse(self.data).expect("header has already been parsed");
+        header.flags
     }
 }
 
@@ -786,6 +797,7 @@ where
 
         let (filename_data, extra_field_data) = variable_data.split_at(file_name_len);
         Ok(ZipLocalFileHeader {
+            flags: local_header_fixed.flags,
             file_path: ZipFilePath::from_bytes(filename_data),
             extra_fields: ExtraFields::new(extra_field_data),
         })
@@ -929,14 +941,25 @@ where
 /// header data is useful for validation, security analysis, and forensic purposes.
 #[derive(Debug)]
 pub struct ZipLocalFileHeader<'a> {
+    flags: EntryFlags,
     file_path: ZipFilePath<RawPath<'a>>,
     extra_fields: ExtraFields<'a>,
 }
 
 impl<'a> ZipLocalFileHeader<'a> {
+    /// Returns the general purpose bit flags from the local file header.
+    ///
+    /// These may differ from the central directory record's flags. See
+    /// [`EntryFlags`] for the individual flag accessors.
+    #[inline]
+    pub fn flags(&self) -> EntryFlags {
+        self.flags
+    }
+
     /// Returns the file path from the local file header.
     ///
     /// This may differ from the central directory file path.
+    #[inline]
     pub fn file_path(&self) -> ZipFilePath<RawPath<'a>> {
         self.file_path
     }
@@ -946,6 +969,7 @@ impl<'a> ZipLocalFileHeader<'a> {
     /// Extra fields in the local header may differ from those in the central directory.
     /// The local header may contain additional or different metadata compared to the
     /// central directory entry.
+    #[inline]
     pub fn extra_fields(&self) -> ExtraFields<'a> {
         self.extra_fields
     }
@@ -1386,7 +1410,7 @@ pub struct ZipFileHeaderRecord<'a> {
     signature: u32,
     version_made_by: u16,
     version_needed: u16,
-    flags: u16,
+    flags: EntryFlags,
     compression_method: CompressionMethodId,
     last_mod_time: u16,
     last_mod_date: u16,
@@ -1504,16 +1528,12 @@ impl<'a> ZipFileHeaderRecord<'a> {
         self.file_name.is_dir()
     }
 
-    /// Returns true if the entry has a data descriptor that follows its
-    /// compressed data.
+    /// Returns the general purpose bit flags for this entry.
     ///
-    /// From the spec (4.3.9.1):
-    ///
-    /// > This descriptor MUST exist if bit 3 of the general purpose bit flag is
-    /// > set
+    /// See [`EntryFlags`] for the individual flag accessors.
     #[inline]
-    pub fn has_data_descriptor(&self) -> bool {
-        self.flags & 0x08 != 0
+    pub fn flags(&self) -> EntryFlags {
+        self.flags
     }
 
     /// Describes where the file's data is located within the archive.
@@ -1523,7 +1543,7 @@ impl<'a> ZipFileHeaderRecord<'a> {
             uncompressed_size: self.uncompressed_size,
             compressed_size: self.compressed_size,
             local_header_offset: self.local_header_offset,
-            has_data_descriptor: self.has_data_descriptor(),
+            has_data_descriptor: self.flags().has_data_descriptor(),
             crc: self.crc32,
         }
     }
@@ -1728,7 +1748,7 @@ impl ZipArchiveEntryWayfinder {
 pub(crate) struct ZipLocalFileHeaderFixed {
     pub(crate) signature: u32,
     pub(crate) version_needed: u16,
-    pub(crate) flags: u16,
+    pub(crate) flags: EntryFlags,
     pub(crate) compression_method: CompressionMethodId,
     pub(crate) last_mod_time: u16,
     pub(crate) last_mod_date: u16,
@@ -1751,7 +1771,7 @@ impl ZipLocalFileHeaderFixed {
         let result = ZipLocalFileHeaderFixed {
             signature: le_u32(&data[0..4]),
             version_needed: le_u16(&data[4..6]),
-            flags: le_u16(&data[6..8]),
+            flags: EntryFlags::new(le_u16(&data[6..8])),
             compression_method: CompressionMethodId(le_u16(&data[8..10])),
             last_mod_time: le_u16(&data[10..12]),
             last_mod_date: le_u16(&data[12..14]),
@@ -1784,7 +1804,7 @@ impl ZipLocalFileHeaderFixed {
         let mut buffer = [0u8; 30];
         buffer[..4].copy_from_slice(&self.signature.to_le_bytes());
         buffer[4..6].copy_from_slice(&self.version_needed.to_le_bytes());
-        buffer[6..8].copy_from_slice(&self.flags.to_le_bytes());
+        buffer[6..8].copy_from_slice(&self.flags.bits().to_le_bytes());
         buffer[8..10].copy_from_slice(&self.compression_method.0.to_le_bytes());
         buffer[10..12].copy_from_slice(&self.last_mod_time.to_le_bytes());
         buffer[12..14].copy_from_slice(&self.last_mod_date.to_le_bytes());
@@ -1803,7 +1823,7 @@ pub(crate) struct ZipFileHeaderFixed {
     pub signature: u32,
     pub version_made_by: u16,
     pub version_needed: u16,
-    pub flags: u16,
+    pub flags: EntryFlags,
     pub compression_method: CompressionMethodId,
     pub last_mod_time: u16,
     pub last_mod_date: u16,
@@ -1845,7 +1865,7 @@ impl ZipFileHeaderFixed {
             signature: le_u32(&data[0..4]),
             version_made_by: le_u16(&data[4..6]),
             version_needed: le_u16(&data[6..8]),
-            flags: le_u16(&data[8..10]),
+            flags: EntryFlags::new(le_u16(&data[8..10])),
             compression_method: CompressionMethodId(le_u16(&data[10..12])),
             last_mod_time: le_u16(&data[12..14]),
             last_mod_date: le_u16(&data[14..16]),
@@ -1900,7 +1920,7 @@ impl ZipFileHeaderFixed {
         buffer[0..4].copy_from_slice(&self.signature.to_le_bytes());
         buffer[4..6].copy_from_slice(&self.version_made_by.to_le_bytes());
         buffer[6..8].copy_from_slice(&self.version_needed.to_le_bytes());
-        buffer[8..10].copy_from_slice(&self.flags.to_le_bytes());
+        buffer[8..10].copy_from_slice(&self.flags.bits().to_le_bytes());
         buffer[10..12].copy_from_slice(&self.compression_method.0.to_le_bytes());
         buffer[12..14].copy_from_slice(&self.last_mod_time.to_le_bytes());
         buffer[14..16].copy_from_slice(&self.last_mod_date.to_le_bytes());

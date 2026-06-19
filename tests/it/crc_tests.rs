@@ -263,7 +263,7 @@ fn data_descriptor_present_for_streamed_entry() {
     // Slice path.
     let archive = ZipArchive::from_slice(&data).unwrap();
     let entry = archive.entries().next_entry().unwrap().unwrap();
-    assert!(entry.has_data_descriptor());
+    assert!(entry.flags().has_data_descriptor());
     let central_crc = entry.crc32();
     let ent = archive.get_entry(entry.wayfinder()).unwrap();
     let dd = ent.data_descriptor().unwrap().expect("descriptor present");
@@ -288,7 +288,7 @@ fn data_descriptor_absent_for_non_streamed_entry() {
     // Slice path.
     let archive = ZipArchive::from_slice(&data).unwrap();
     let entry = archive.entries().next_entry().unwrap().unwrap();
-    assert!(!entry.has_data_descriptor());
+    assert!(!entry.flags().has_data_descriptor());
     let ent = archive.get_entry(entry.wayfinder()).unwrap();
     assert!(ent.data_descriptor().unwrap().is_none());
 

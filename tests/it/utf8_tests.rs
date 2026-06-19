@@ -34,6 +34,14 @@ fn test_filename_utf8_flag(#[case] filename: &str, #[case] should_have_utf8_flag
         utf8_flag_present, should_have_utf8_flag,
         "UTF-8 flag mismatch for filename '{filename}': expected {should_have_utf8_flag}, got {utf8_flag_present}"
     );
+
+    // The same flag must be reachable through the public accessor on both the
+    // central directory record and the local header.
+    let archive = rawzip::ZipArchive::from_slice(&output).unwrap();
+    let entry = archive.entries().next_entry().unwrap().unwrap();
+    assert_eq!(entry.flags().is_utf8(), should_have_utf8_flag);
+    let slice_entry = archive.get_entry(entry.wayfinder()).unwrap();
+    assert_eq!(slice_entry.flags().is_utf8(), should_have_utf8_flag);
 }
 
 /// Test directory UTF-8 flag behavior with various directory names
