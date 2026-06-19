@@ -147,6 +147,8 @@ fn decrypt_winzip_aes_entry(path: &str, expected_strength: u8, expected_vendor_v
 
     assert_eq!(entry.file_path().as_ref(), b"test.txt");
     assert_eq!(entry.compression_method(), CompressionMethod::Aes);
+    assert!(entry.flags().is_encrypted());
+    assert!(!entry.flags().has_strong_encryption());
 
     let central_metadata = find_aes_extra_field(entry.extra_fields());
     assert_eq!(central_metadata, expected_metadata);
@@ -174,6 +176,7 @@ fn decrypt_winzip_aes_entry(path: &str, expected_strength: u8, expected_vendor_v
         .unwrap();
     let local_metadata = find_aes_extra_field(local_header.extra_fields());
     assert_eq!(local_metadata, expected_metadata);
+    assert!(local_header.flags().is_encrypted());
 
     let ciphertext_len = compressed_size
         .checked_sub((salt_len + PASSWORD_VERIFIER_LEN + AUTH_CODE_LEN) as u64)

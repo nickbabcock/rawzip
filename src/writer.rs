@@ -1,8 +1,8 @@
 use crate::{
     CENTRAL_HEADER_SIGNATURE, CompressionMethod, DataDescriptor,
     END_OF_CENTRAL_DIR_LOCATOR_SIGNATURE, END_OF_CENTRAL_DIR_SIGNATURE64,
-    END_OF_CENTRAL_DIR_SIGNAUTRE_BYTES, Error, Header, ZipFileHeaderFixed, ZipLocalFileHeaderFixed,
-    crc,
+    END_OF_CENTRAL_DIR_SIGNAUTRE_BYTES, EntryFlags, Error, Header, ZipFileHeaderFixed,
+    ZipLocalFileHeaderFixed, crc,
     errors::ErrorKind,
     extra_fields::{ExtraFieldId, ExtraFieldsContainer},
     mode::CREATOR_UNIX,
@@ -568,7 +568,7 @@ where
         let header = ZipLocalFileHeaderFixed {
             signature: ZipLocalFileHeaderFixed::SIGNATURE,
             version_needed: 20,
-            flags,
+            flags: EntryFlags::new(flags),
             compression_method: compression_method.as_id(),
             last_mod_time: dos_time,
             last_mod_date: dos_date,
@@ -780,7 +780,7 @@ where
                 signature: CENTRAL_HEADER_SIGNATURE,
                 version_made_by,
                 version_needed,
-                flags: file.flags,
+                flags: EntryFlags::new(file.flags),
                 compression_method: file.compression_method.as_id(),
                 last_mod_time: dos_time,
                 last_mod_date: dos_date,

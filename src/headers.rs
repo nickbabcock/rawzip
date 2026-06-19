@@ -77,6 +77,69 @@ impl std::ops::BitAndAssign for Header {
     }
 }
 
+/// The general purpose bit flags of a ZIP entry.
+///
+/// (§ 4.4.4). Only the bits with a fixed, method-independent meaning are
+/// surfaced as named accessors. Use [`EntryFlags::bits`] to inspect the raw
+/// value.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct EntryFlags(u16);
+
+impl EntryFlags {
+    const ENCRYPTED: u16 = 1 << 0;
+    const DATA_DESCRIPTOR: u16 = 1 << 3;
+    const STRONG_ENCRYPTION: u16 = 1 << 6;
+    const LANGUAGE_ENCODING: u16 = 1 << 11;
+    const MASKED: u16 = 1 << 13;
+
+    #[inline]
+    pub(crate) const fn new(value: u16) -> Self {
+        Self(value)
+    }
+
+    /// The raw 16-bit general purpose bit flag value.
+    ///
+    /// Use this to inspect the method-dependent bits 1 and 2, or any of the
+    /// reserved bits not surfaced by the named accessors.
+    #[inline]
+    pub const fn bits(self) -> u16 {
+        self.0
+    }
+
+    /// Bit 0: the entry's data is encrypted.
+    #[inline]
+    pub const fn is_encrypted(self) -> bool {
+        self.0 & Self::ENCRYPTED != 0
+    }
+
+    /// Bit 3: the crc-32, compressed size, and uncompressed size are zeroed in
+    /// the local header, with the correct values stored in a data descriptor
+    /// that follows the compressed data.
+    #[inline]
+    pub const fn has_data_descriptor(self) -> bool {
+        self.0 & Self::DATA_DESCRIPTOR != 0
+    }
+
+    /// Bit 6: the entry uses strong encryption.
+    #[inline]
+    pub const fn has_strong_encryption(self) -> bool {
+        self.0 & Self::STRONG_ENCRYPTION != 0
+    }
+
+    /// Bit 11 (EFS): the file name and comment are encoded as UTF-8.
+    #[inline]
+    pub const fn is_utf8(self) -> bool {
+        self.0 & Self::LANGUAGE_ENCODING != 0
+    }
+
+    /// Bit 13: selected values in the local header are masked because the
+    /// central directory is encrypted.
+    #[inline]
+    pub const fn is_masked(self) -> bool {
+        self.0 & Self::MASKED != 0
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
