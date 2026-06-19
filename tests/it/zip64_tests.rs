@@ -80,3 +80,16 @@ fn test_zip64_threshold_entries(#[case] entry_count: usize, #[case] should_be_zi
 
     verify_expected_entries(&data, entry_count as u64);
 }
+
+// `zip64-cd-size-sentinel.zip`: two empty files and a classic EOCD whose
+// central-directory-size field is the 0xFFFFFFFF sentinel, paired with a valid
+// zip64 EOCD record + locator carrying the true (small) size.
+//
+// Cross-validated by 7-Zip, python zipfile, and unzip.
+//
+// Go bug: golang/go#56249
+#[test]
+fn read_zip64_from_cd_size_sentinel() {
+    let data = std::fs::read("assets/zip64-cd-size-sentinel.zip").unwrap();
+    verify_expected_entries(&data, 2);
+}

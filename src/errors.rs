@@ -51,9 +51,6 @@ pub enum ErrorKind {
     /// Missing end of central directory
     MissingEndOfCentralDirectory,
 
-    /// Missing zip64 end of central directory
-    MissingZip64EndOfCentralDirectory,
-
     /// Buffer size too small
     BufferTooSmall,
 
@@ -105,9 +102,6 @@ impl std::fmt::Display for ErrorKind {
             ErrorKind::IO(ref err) => err.fmt(f),
             ErrorKind::MissingEndOfCentralDirectory => {
                 write!(f, "Missing end of central directory")
-            }
-            ErrorKind::MissingZip64EndOfCentralDirectory => {
-                write!(f, "Missing zip64 end of central directory")
             }
             ErrorKind::BufferTooSmall => {
                 write!(f, "Buffer size too small")
