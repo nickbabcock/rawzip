@@ -10,6 +10,7 @@ mod crc_tests;
 mod encryption_tests;
 mod extra_data_zip_tests;
 mod extra_fields_test;
+mod false_sentinel_tests;
 mod false_signature_tests;
 mod modification_time_tests;
 mod permission_tests;
@@ -811,10 +812,6 @@ fn errors_eq(a: &Error, b: &ErrorKind) -> bool {
         (ErrorKind::IO(a), ErrorKind::IO(b)) => a.kind() == b.kind(),
         (ErrorKind::Eof, ErrorKind::Eof) => true,
         (ErrorKind::MissingEndOfCentralDirectory, ErrorKind::MissingEndOfCentralDirectory) => true,
-        (
-            ErrorKind::MissingZip64EndOfCentralDirectory,
-            ErrorKind::MissingZip64EndOfCentralDirectory,
-        ) => true,
         (ErrorKind::BufferTooSmall, ErrorKind::BufferTooSmall) => true,
         _ => false,
     }

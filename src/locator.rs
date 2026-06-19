@@ -103,7 +103,7 @@ impl ZipLocator {
         location: usize,
     ) -> Result<EndOfCentralDirectory, Error> {
         let eocd = EndOfCentralDirectoryRecordFixed::parse(&data[location..])?;
-        let is_zip64 = eocd.is_zip64();
+        let has_zip64_sentinel = eocd.has_zip64_sentinel();
         let eocd = EndOfCentralDirectoryRecord::from_parts(location as u64, eocd);
 
         // Validate comment is completely present in the slice
@@ -113,13 +113,20 @@ impl ZipLocator {
             return Err(Error::from(ErrorKind::Eof));
         }
 
-        if !is_zip64 {
+        if !has_zip64_sentinel {
             return EndOfCentralDirectory::create(eocd);
         }
 
-        let zip64l =
-            &data[location.saturating_sub(Zip64EndOfCentralDirectoryLocatorRecord::SIZE)..];
-        let zip64_locator = Zip64EndOfCentralDirectoryLocatorRecord::parse(zip64l)?;
+        // A sentinel EOCD field only hints at zip64. We need to support classic
+        // zips with 65535 entries.
+        let zip64_locator = location
+            .checked_sub(Zip64EndOfCentralDirectoryLocatorRecord::SIZE)
+            .and_then(|start| Zip64EndOfCentralDirectoryLocatorRecord::parse(&data[start..]).ok());
+
+        let Some(zip64_locator) = zip64_locator else {
+            return EndOfCentralDirectory::create(eocd);
+        };
+
         let zip64_eocd = &data[(zip64_locator.directory_offset as usize).min(data.len())..];
         let zip64_record = Zip64EndOfCentralDirectoryRecord::parse(zip64_eocd)?;
 
@@ -363,7 +370,7 @@ impl ZipLocator {
             }
         };
 
-        let is_zip64 = eocd.is_zip64();
+        let has_zip64_sentinel = eocd.has_zip64_sentinel();
 
         end_of_central_directory =
             &end_of_central_directory[EndOfCentralDirectoryRecordFixed::SIZE..];
@@ -386,7 +393,7 @@ impl ZipLocator {
         }
 
         let eocd = EndOfCentralDirectoryRecord::from_parts(eocd_offset, eocd);
-        if !is_zip64 {
+        if !has_zip64_sentinel {
             return match EndOfCentralDirectory::create(eocd) {
                 Ok(eocd) => Ok((reader.inner, eocd)),
                 Err(e) => Err((reader.inner, e)),
@@ -395,16 +402,18 @@ impl ZipLocator {
 
         let eocd64l_size = Zip64EndOfCentralDirectoryLocatorRecord::SIZE;
 
+        // A sentinel EOCD field only hints at zip64. We need to support classic
+        // zips with 65535 entries.
+        if (eocd64l_size as u64) > eocd_offset {
+            return match EndOfCentralDirectory::create(eocd) {
+                Ok(eocd) => Ok((reader.inner, eocd)),
+                Err(e) => Err((reader.inner, e)),
+            };
+        }
+
         // Unhappy path: if we needed to issue any reads since the original
         // eocd or don't have enough data in the buffer
         let eocd64l_pos = if reader.is_marked() || eocd64l_size > buffer_pos {
-            if (eocd64l_size as u64) > eocd_offset {
-                return Err((
-                    reader.inner,
-                    Error::from(ErrorKind::MissingZip64EndOfCentralDirectory),
-                ));
-            }
-
             let read = reader.read_exact_at(
                 &mut buffer[..eocd64l_size],
                 eocd_offset - eocd64l_size as u64,
@@ -421,7 +430,12 @@ impl ZipLocator {
         let zip64l_eocd = &buffer[eocd64l_pos..eocd64l_pos + eocd64l_size];
         let zip64_locator = match Zip64EndOfCentralDirectoryLocatorRecord::parse(zip64l_eocd) {
             Ok(locator) => locator,
-            Err(e) => return Err((reader.inner, e)),
+            Err(_) => {
+                return match EndOfCentralDirectory::create(eocd) {
+                    Ok(eocd) => Ok((reader.inner, eocd)),
+                    Err(e) => Err((reader.inner, e)),
+                };
+            }
         };
 
         let zip64_eocd_fixed_size = Zip64EndOfCentralDirectoryRecord::SIZE;
@@ -675,10 +689,12 @@ impl EndOfCentralDirectoryRecordFixed {
         Ok(result)
     }
 
-    pub fn is_zip64(&self) -> bool {
-        // https://github.com/zlib-ng/minizip-ng/blob/55db144e03027b43263e5ebcb599bf0878ba58de/mz_zip.c#L1011
-        self.num_entries == u16::MAX || // 4.4.22
-        self.central_dir_offset == u32::MAX // 4.4.24
+    /// If true, a zip64 record *may* be present.
+    pub fn has_zip64_sentinel(&self) -> bool {
+        self.num_entries == u16::MAX        // 4.4.21
+            || self.total_entries == u16::MAX   // 4.4.22
+            || self.central_dir_size == u32::MAX // 4.4.23
+            || self.central_dir_offset == u32::MAX // 4.4.24
     }
 }
 
