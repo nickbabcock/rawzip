@@ -1272,7 +1272,7 @@ struct ZipEntryOptions {
 mod tests {
     use super::*;
     use crate::ZipArchive;
-    use std::io::Cursor;
+    use std::io::{Cursor, Write};
 
     #[test]
     fn test_name_lifetime_independence() {
@@ -1365,8 +1365,6 @@ mod tests {
 
     #[test]
     fn test_crc32_options() {
-        use std::io::Write;
-
         let data = b"Hello, world!";
         let correct_crc = crate::crc32(data);
         let incorrect_crc = 0x12345678u32;
@@ -1525,8 +1523,6 @@ mod tests {
 
     #[test]
     fn test_tuple_api() {
-        use std::io::Write;
-
         let data = b"Hello, world!";
         let custom_crc = 0x12345678u32;
 
@@ -1553,8 +1549,6 @@ mod tests {
 
     #[test]
     fn test_comment_round_trip() {
-        use std::io::Write;
-
         let file_comment = b"hello file comment";
         let archive_comment = b"hello archive comment";
 
@@ -1584,6 +1578,59 @@ mod tests {
         let mut entries = archive.entries();
         let entry = entries.next_entry().unwrap().unwrap();
         assert_eq!(entry.comment().as_bytes(), file_comment);
+    }
+
+    #[test]
+    fn test_comment_round_trip_multiple_entries() {
+        let mut output = Cursor::new(Vec::new());
+        let mut archive = ZipArchiveWriter::new(&mut output);
+
+        let (mut entry, config) = archive
+            .new_file("first.txt")
+            .comment(b"first comment")
+            .start()
+            .unwrap();
+        let mut writer = config.wrap(&mut entry);
+        writer.write_all(b"first content").unwrap();
+        let (_, desc) = writer.finish().unwrap();
+        entry.finish(desc).unwrap();
+
+        // Entry with no comment in the middle.
+        let (mut entry, config) = archive.new_file("second.txt").start().unwrap();
+        let mut writer = config.wrap(&mut entry);
+        writer.write_all(b"second content").unwrap();
+        let (_, desc) = writer.finish().unwrap();
+        entry.finish(desc).unwrap();
+
+        let (mut entry, config) = archive
+            .new_file("third.txt")
+            .comment(b"third comment")
+            .start()
+            .unwrap();
+        let mut writer = config.wrap(&mut entry);
+        writer.write_all(b"third content").unwrap();
+        let (_, desc) = writer.finish().unwrap();
+        entry.finish(desc).unwrap();
+
+        archive.finish().unwrap();
+
+        let data = output.into_inner();
+        let archive = ZipArchive::from_slice(&data).unwrap();
+
+        let mut entries = archive.entries();
+        let first = entries.next_entry().unwrap().unwrap();
+        assert_eq!(first.file_path().as_ref(), b"first.txt");
+        assert_eq!(first.comment().as_bytes(), b"first comment");
+
+        let second = entries.next_entry().unwrap().unwrap();
+        assert_eq!(second.file_path().as_ref(), b"second.txt");
+        assert_eq!(second.comment().as_bytes(), b"");
+
+        let third = entries.next_entry().unwrap().unwrap();
+        assert_eq!(third.file_path().as_ref(), b"third.txt");
+        assert_eq!(third.comment().as_bytes(), b"third comment");
+
+        assert!(entries.next_entry().unwrap().is_none());
     }
 
     #[test]
@@ -1622,8 +1669,6 @@ mod tests {
     #[test]
     #[allow(deprecated)]
     fn test_deprecated_create_method() {
-        use std::io::Write;
-
         let data = b"Hello, deprecated API!";
 
         // Test that deprecated create() method still works
