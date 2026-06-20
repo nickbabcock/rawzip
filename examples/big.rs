@@ -128,5 +128,23 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         5 * 1024 * 1024 * 1024,
         "Expected to read exactly 5GB from big_zeros.dat"
     );
+
+    // big_zeros.dat is >4 GiB, so its data descriptor uses 8-byte zip64 sizes.
+    let descriptor_reader = zip_entry.reader();
+    let descriptor = descriptor_reader
+        .data_descriptor()?
+        .expect("streamed entry has a data descriptor");
+    descriptor_reader
+        .claim_verifier()
+        .valid(rawzip::ZipVerification {
+            crc: descriptor.crc32(),
+            uncompressed_size: descriptor.uncompressed_size(),
+        })?;
+    assert_eq!(
+        descriptor.compressed_size(),
+        wayfinder.compressed_size_hint(),
+        "descriptor compressed size should match the central directory"
+    );
+
     Ok(())
 }

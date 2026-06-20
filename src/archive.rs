@@ -164,6 +164,7 @@ impl<T: AsRef<[u8]>> ZipSliceArchive<T> {
             local_header_offset: entry.local_header_offset,
             data_start_offset: header_size,
             has_data_descriptor: entry.has_data_descriptor,
+            data_descriptor_uses_zip64_sizes: entry.data_descriptor_uses_zip64_sizes,
             descriptor,
         })
     }
@@ -181,6 +182,7 @@ pub struct ZipSliceEntry<'a> {
     // self.data[self.data_start_offset] is the start of compressed data
     data_start_offset: u32,
     has_data_descriptor: bool,
+    data_descriptor_uses_zip64_sizes: bool,
     descriptor: &'a [u8],
 }
 
@@ -203,9 +205,12 @@ impl<'a> ZipSliceEntry<'a> {
             return Ok(None);
         }
 
-        let descriptor = DataDescriptor::parse(self.descriptor)?;
+        let descriptor =
+            DataDescriptor::parse(self.descriptor, self.data_descriptor_uses_zip64_sizes)?;
         Ok(Some(ZipDataDescriptor {
             crc: descriptor.crc,
+            compressed_size: descriptor.compressed_size,
+            uncompressed_size: descriptor.uncompressed_size,
         }))
     }
 
@@ -913,10 +918,15 @@ where
             return Ok(None);
         }
 
-        let descriptor =
-            DataDescriptor::read_at(self.range_reader.get_ref(), self.range_reader.end_offset())?;
+        let descriptor = DataDescriptor::read_at(
+            self.range_reader.get_ref(),
+            self.range_reader.end_offset(),
+            self.entry.data_descriptor_uses_zip64_sizes,
+        )?;
         Ok(Some(ZipDataDescriptor {
             crc: descriptor.crc,
+            compressed_size: descriptor.compressed_size,
+            uncompressed_size: descriptor.uncompressed_size,
         }))
     }
 }
@@ -979,60 +989,101 @@ impl<'a> ZipLocalFileHeader<'a> {
 ///
 /// Obtain one via [`ZipReader::data_descriptor`] or
 /// [`ZipSliceEntry::data_descriptor`].
+///
+/// The descriptor's size fields are 4 or 8 bytes wide depending on whether the
+/// entry's central directory record signalled zip64 sizes (APPNOTE 4.3.9.2).
+///
+/// Decoding assumes the optional `0x08074b50` signature is present iff the
+/// first four bytes equal it. For the rare producer that omits the signature on
+/// a descriptor whose CRC equals `0x08074b50`, the fields are decoded shifted
+/// by four bytes, causing a false rejection.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ZipDataDescriptor {
     crc: u32,
+    compressed_size: u64,
+    uncompressed_size: u64,
 }
 
 impl ZipDataDescriptor {
     /// The CRC32 checksum of the uncompressed data as recorded in the data
     /// descriptor.
-    ///
-    /// Can be cross-checked against the central directory CRC
-    /// ([`ZipFileHeaderRecord::crc32`]) to detect inconsistent archives.
     #[inline]
-    pub fn crc(&self) -> u32 {
+    pub fn crc32(&self) -> u32 {
         self.crc
+    }
+
+    /// The compressed size of the entry as recorded in the data descriptor.
+    #[inline]
+    pub fn compressed_size(&self) -> u64 {
+        self.compressed_size
+    }
+
+    /// The uncompressed size of the entry as recorded in the data descriptor.
+    #[inline]
+    pub fn uncompressed_size(&self) -> u64 {
+        self.uncompressed_size
     }
 }
 
 #[derive(Debug, Clone)]
 pub(crate) struct DataDescriptor {
     crc: u32,
+    compressed_size: u64,
+    uncompressed_size: u64,
 }
 
 impl DataDescriptor {
-    const SIZE: usize = 8;
+    /// The maximum on-disk size of a data descriptor: optional 4-byte
+    /// signature + 4-byte crc + two 8-byte zip64 sizes.
+    const MAX_SIZE: usize = 24;
     pub const SIGNATURE: u32 = 0x08074b50;
 
-    fn parse(data: &[u8]) -> Result<DataDescriptor, Error> {
-        if data.len() < Self::SIZE {
-            return Err(Error::from(ErrorKind::Eof));
-        }
+    /// Parses a data descriptor from `data`.
+    fn parse(data: &[u8], uses_zip64_sizes: bool) -> Result<DataDescriptor, Error> {
+        let eof = || Error::from(ErrorKind::Eof);
 
-        let mut pos = 0;
+        // Skip the optional 0x08074b50 signature (APPNOTE 4.3.9.3).
+        let body = match data.split_first_chunk::<4>() {
+            Some((sig, rest)) if u32::from_le_bytes(*sig) == Self::SIGNATURE => rest,
+            _ => data,
+        };
 
-        let potential_signature = le_u32(&data[0..4]);
-        if potential_signature == Self::SIGNATURE {
-            pos += 4;
-        }
+        let (crc, sizes) = body.split_first_chunk::<4>().ok_or_else(eof)?;
+        let crc = u32::from_le_bytes(*crc);
 
-        // The crc is followed by the compressed_size and then the
-        // uncompressed_size but the spec allows for the sizes to be either 4
-        // bytes each or 8 bytes in Zip64 mode. (spec 4.3.9.1). They aren't
-        // needed, so we skip them.
+        // The compressed/uncompressed sizes are 8 bytes each in zip64 mode,
+        // otherwise 4 bytes each (APPNOTE 4.3.9.2).
+        let (compressed_size, uncompressed_size) = if uses_zip64_sizes {
+            let (compressed, rest) = sizes.split_first_chunk::<8>().ok_or_else(eof)?;
+            let (uncompressed, _) = rest.split_first_chunk::<8>().ok_or_else(eof)?;
+            (
+                u64::from_le_bytes(*compressed),
+                u64::from_le_bytes(*uncompressed),
+            )
+        } else {
+            let (compressed, rest) = sizes.split_first_chunk::<4>().ok_or_else(eof)?;
+            let (uncompressed, _) = rest.split_first_chunk::<4>().ok_or_else(eof)?;
+            (
+                u64::from(u32::from_le_bytes(*compressed)),
+                u64::from(u32::from_le_bytes(*uncompressed)),
+            )
+        };
+
         Ok(DataDescriptor {
-            crc: le_u32(&data[pos..pos + 4]),
+            crc,
+            compressed_size,
+            uncompressed_size,
         })
     }
 
-    fn read_at<R>(reader: R, offset: u64) -> Result<DataDescriptor, Error>
+    fn read_at<R>(reader: R, offset: u64, uses_zip64_sizes: bool) -> Result<DataDescriptor, Error>
     where
         R: ReaderAt,
     {
-        let mut buffer = [0u8; Self::SIZE];
-        reader.read_exact_at(&mut buffer, offset)?;
-        Self::parse(&buffer)
+        // It's safe to over-read here due to size of cd + eocd is already greater
+        let mut buffer = [0u8; Self::MAX_SIZE];
+        let read = reader.try_read_at_least_at(&mut buffer, Self::MAX_SIZE, offset)?;
+        Self::parse(&buffer[..read], uses_zip64_sizes)
     }
 }
 
@@ -1429,6 +1480,7 @@ pub struct ZipFileHeaderRecord<'a> {
     extra_field: &'a [u8],
     file_comment: ZipStr<'a>,
     is_zip64: bool,
+    data_descriptor_uses_zip64_sizes: bool,
 }
 
 impl<'a> ZipFileHeaderRecord<'a> {
@@ -1440,6 +1492,15 @@ impl<'a> ZipFileHeaderRecord<'a> {
         file_comment: &'a [u8],
         central_directory_offset: u64,
     ) -> Self {
+        let zip64_sizes =
+            header.uncompressed_size == u32::MAX || header.compressed_size == u32::MAX;
+
+        // Resolve descriptor size width from the raw inline size sentinels to
+        // match libziparchive's approach:
+        //
+        // https://android.googlesource.com/platform/system/libziparchive/+/refs/tags/android-17.0.0_r1/zip_archive.cc#764
+        let data_descriptor_uses_zip64_sizes = zip64_sizes;
+
         let mut result = Self {
             signature: header.signature,
             version_made_by: header.version_made_by,
@@ -1463,10 +1524,10 @@ impl<'a> ZipFileHeaderRecord<'a> {
             extra_field,
             file_comment: ZipStr::new(file_comment),
             is_zip64: false,
+            data_descriptor_uses_zip64_sizes,
         };
 
-        if result.uncompressed_size != u64::from(u32::MAX)
-            && result.compressed_size != u64::from(u32::MAX)
+        if !zip64_sizes
             && result.local_header_offset != u64::from(u32::MAX)
             && result.disk_number_start != u32::from(u16::MAX)
         {
@@ -1545,6 +1606,7 @@ impl<'a> ZipFileHeaderRecord<'a> {
             local_header_offset: self.local_header_offset,
             has_data_descriptor: self.flags().has_data_descriptor(),
             crc: self.crc32,
+            data_descriptor_uses_zip64_sizes: self.data_descriptor_uses_zip64_sizes,
         }
     }
 
@@ -1722,6 +1784,7 @@ pub struct ZipArchiveEntryWayfinder {
     local_header_offset: u64,
     crc: u32,
     has_data_descriptor: bool,
+    data_descriptor_uses_zip64_sizes: bool,
 }
 
 impl ZipArchiveEntryWayfinder {
@@ -1998,6 +2061,79 @@ mod tests {
         let archive = ZipArchive::from_seekable(Cursor::new(data), &mut buf).unwrap();
         let mut entries = archive.entries(&mut buf);
         assert!(entries.next_entry().is_err());
+    }
+
+    #[test]
+    fn data_descriptor_parse_widths_and_signature() {
+        // 4-byte sizes, with the optional signature.
+        let mut buf = Vec::new();
+        buf.extend_from_slice(&DataDescriptor::SIGNATURE.to_le_bytes());
+        buf.extend_from_slice(&0xdead_beefu32.to_le_bytes()); // crc
+        buf.extend_from_slice(&100u32.to_le_bytes()); // compressed
+        buf.extend_from_slice(&200u32.to_le_bytes()); // uncompressed
+        let dd = DataDescriptor::parse(&buf, false).unwrap();
+        assert_eq!(dd.crc, 0xdead_beef);
+        assert_eq!(dd.compressed_size, 100);
+        assert_eq!(dd.uncompressed_size, 200);
+
+        // 4-byte sizes, without the signature (crc leads).
+        let dd = DataDescriptor::parse(&buf[4..], false).unwrap();
+        assert_eq!(dd.crc, 0xdead_beef);
+        assert_eq!(dd.compressed_size, 100);
+        assert_eq!(dd.uncompressed_size, 200);
+
+        // 8-byte zip64 sizes, with the optional signature.
+        let mut buf = Vec::new();
+        buf.extend_from_slice(&DataDescriptor::SIGNATURE.to_le_bytes());
+        buf.extend_from_slice(&0x0102_0304u32.to_le_bytes()); // crc
+        buf.extend_from_slice(&0x1_0000_0000u64.to_le_bytes()); // compressed
+        buf.extend_from_slice(&0x2_0000_0000u64.to_le_bytes()); // uncompressed
+        let dd = DataDescriptor::parse(&buf, true).unwrap();
+        assert_eq!(dd.crc, 0x0102_0304);
+        assert_eq!(dd.compressed_size, 0x1_0000_0000);
+        assert_eq!(dd.uncompressed_size, 0x2_0000_0000);
+
+        // A buffer too short for the chosen width is rejected.
+        assert!(DataDescriptor::parse(&buf[..12], true).is_err());
+    }
+
+    #[test]
+    fn data_descriptor_width_ignores_offset_only_zip64() {
+        // The sizes are small, but the local header offset overflowed past
+        // 4 GiB, so the entry carries a zip64 extra field for the offset alone.
+        // The descriptor's size width must stay 4-byte (false), derived from the
+        // inline size sentinels rather than the offset-driven zip64 field.
+        let header = ZipFileHeaderFixed {
+            signature: 0x0201_4b50,
+            version_made_by: 0,
+            version_needed: 0,
+            flags: 0x08,
+            compression_method: CompressionMethodId(0),
+            last_mod_time: 0,
+            last_mod_date: 0,
+            crc32: 0,
+            compressed_size: 100,
+            uncompressed_size: 200,
+            file_name_len: 0,
+            extra_field_len: 12,
+            file_comment_len: 0,
+            disk_number_start: 0,
+            internal_file_attrs: 0,
+            external_file_attrs: 0,
+            local_header_offset: u32::MAX,
+        };
+
+        // A zip64 extra field carrying only the 8-byte local header offset.
+        let mut extra = Vec::new();
+        extra.extend_from_slice(&ExtraFieldId::ZIP64.as_u16().to_le_bytes());
+        extra.extend_from_slice(&8u16.to_le_bytes());
+        extra.extend_from_slice(&0x1_0000_0000u64.to_le_bytes());
+
+        let record = ZipFileHeaderRecord::from_parts(header, &[], &extra, &[], 0);
+        assert!(record.is_zip64);
+        assert_eq!(record.local_header_offset, 0x1_0000_0000);
+        assert!(!record.data_descriptor_uses_zip64_sizes);
+        assert!(!record.wayfinder().data_descriptor_uses_zip64_sizes);
     }
 
     #[test]

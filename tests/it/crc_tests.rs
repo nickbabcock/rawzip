@@ -54,7 +54,10 @@ fn corrupt_descriptor_crc(data: &mut [u8]) -> (u32, u32) {
     let archive = ZipArchive::from_slice(&*data).unwrap();
     let entry = archive.entries().next_entry().unwrap().unwrap();
     let ent = archive.get_entry(entry.wayfinder()).unwrap();
-    assert_eq!(ent.data_descriptor().unwrap().unwrap().crc(), entry.crc32());
+    assert_eq!(
+        ent.data_descriptor().unwrap().unwrap().crc32(),
+        entry.crc32()
+    );
 
     let (_, compressed_data_end) = ent.compressed_data_range();
     let descriptor_crc_offset = compressed_data_end as usize + 4;
@@ -265,9 +268,13 @@ fn data_descriptor_present_for_streamed_entry() {
     let entry = archive.entries().next_entry().unwrap().unwrap();
     assert!(entry.flags().has_data_descriptor());
     let central_crc = entry.crc32();
+    let central_compressed = entry.compressed_size_hint();
+    let central_uncompressed = entry.uncompressed_size_hint();
     let ent = archive.get_entry(entry.wayfinder()).unwrap();
     let dd = ent.data_descriptor().unwrap().expect("descriptor present");
-    assert_eq!(dd.crc(), central_crc);
+    assert_eq!(dd.crc32(), central_crc);
+    assert_eq!(dd.compressed_size(), central_compressed);
+    assert_eq!(dd.uncompressed_size(), central_uncompressed);
 
     // Reader path.
     let archive = ZipArchive::from_slice(&data).unwrap().into_reader();
@@ -278,7 +285,9 @@ fn data_descriptor_present_for_streamed_entry() {
         .data_descriptor()
         .unwrap()
         .expect("descriptor present");
-    assert_eq!(dd.crc(), central_crc);
+    assert_eq!(dd.crc32(), central_crc);
+    assert_eq!(dd.compressed_size(), central_compressed);
+    assert_eq!(dd.uncompressed_size(), central_uncompressed);
 }
 
 #[test]
@@ -300,16 +309,23 @@ fn data_descriptor_absent_for_non_streamed_entry() {
     assert!(reader.data_descriptor().unwrap().is_none());
 }
 
+/// Mirrors libziparchive's data-descriptor consistency check: it cross-checks
+/// all three descriptor fields (crc, compressed size, uncompressed size)
+/// against the central directory:
+///
+/// ref: https://android.googlesource.com/platform/system/libziparchive/+/refs/tags/android-17.0.0_r1/zip_archive.cc#775
 struct DescriptorVerifier<R> {
     reader: flate2::CrcReader<DeflateDecoder<ZipReader<R>>>,
+    expected_compressed_size: u64,
     size: u64,
     verified: bool,
 }
 
 impl<R: ReaderAt> DescriptorVerifier<R> {
-    fn new(reader: ZipReader<R>) -> Self {
+    fn new(reader: ZipReader<R>, expected_compressed_size: u64) -> Self {
         Self {
             reader: flate2::CrcReader::new(DeflateDecoder::new(reader)),
+            expected_compressed_size,
             size: 0,
             verified: false,
         }
@@ -332,12 +348,26 @@ impl<R: ReaderAt> Read for DescriptorVerifier<R> {
                 .data_descriptor()
                 .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?
             {
+                // Cross-check the descriptor's crc and uncompressed size against
+                // the central directory.
                 expected
                     .valid(ZipVerification {
-                        crc: descriptor.crc(),
-                        uncompressed_size: expected.uncompressed_size,
+                        crc: descriptor.crc32(),
+                        uncompressed_size: descriptor.uncompressed_size(),
                     })
                     .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+
+                // and the compressed size, which `ZipVerification` omits.
+                if descriptor.compressed_size() != self.expected_compressed_size {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        format!(
+                            "compressed size mismatch: descriptor {} vs central {}",
+                            descriptor.compressed_size(),
+                            self.expected_compressed_size
+                        ),
+                    ));
+                }
             }
 
             expected
@@ -369,7 +399,59 @@ fn descriptor_cross_check_rejects_descriptor_divergence() {
 
     // The cross-checking verifier rejects the descriptor/central mismatch.
     let ent = archive.get_entry(wayfinder).unwrap();
-    let mut verifier = DescriptorVerifier::new(ent.reader());
+    let mut verifier = DescriptorVerifier::new(ent.reader(), wayfinder.compressed_size_hint());
     let err = io::copy(&mut verifier, &mut io::sink()).unwrap_err();
     assert_invalid_checksum(err, original, corrupted);
+}
+
+/// Corrupts only the compressed size field within an entry's data descriptor.
+fn corrupt_descriptor_compressed_size(data: &mut [u8]) -> (u64, u64) {
+    let archive = ZipArchive::from_slice(&*data).unwrap();
+    let entry = archive.entries().next_entry().unwrap().unwrap();
+    assert!(entry.has_data_descriptor());
+    let ent = archive.get_entry(entry.wayfinder()).unwrap();
+
+    let (_, compressed_data_end) = ent.compressed_data_range();
+    let offset = compressed_data_end as usize + 8;
+    let original = u32::from_le_bytes(data[offset..offset + 4].try_into().unwrap());
+    let corrupted = original ^ 0xffff_ffff;
+    data[offset..offset + 4].copy_from_slice(&corrupted.to_le_bytes());
+    (u64::from(original), u64::from(corrupted))
+}
+
+#[test]
+fn descriptor_cross_check_rejects_size_divergence() {
+    let mut data = build_deflate_zip(CONTENT);
+    // Corrupt only the descriptor's compressed size; the central directory and
+    // data stay correct.
+    let (original, corrupted) = corrupt_descriptor_compressed_size(&mut data);
+    let read_limit = CONTENT.len() as u64 + 1;
+
+    // The default verifying_reader keys off the central directory (and never
+    // consults the descriptor sizes), so it succeeds despite the corruption.
+    let archive = ZipArchive::from_slice(&data).unwrap().into_reader();
+    let wayfinder = first_wayfinder(&archive);
+    let ent = archive.get_entry(wayfinder).unwrap();
+    let verifier = ent.verifying_reader(DeflateDecoder::new(ent.reader()));
+    io::copy(&mut verifier.take(read_limit), &mut io::sink()).unwrap();
+
+    // The descriptor still decodes both sizes; only the compressed size is wrong.
+    let ent = archive.get_entry(wayfinder).unwrap();
+    let descriptor = ent
+        .reader()
+        .data_descriptor()
+        .unwrap()
+        .expect("descriptor present");
+    assert_eq!(descriptor.compressed_size(), corrupted);
+    assert_ne!(descriptor.compressed_size(), original);
+    assert_eq!(
+        descriptor.uncompressed_size(),
+        wayfinder.uncompressed_size_hint()
+    );
+
+    // The cross-checking verifier rejects the descriptor/central size mismatch.
+    let ent = archive.get_entry(wayfinder).unwrap();
+    let mut verifier = DescriptorVerifier::new(ent.reader(), wayfinder.compressed_size_hint());
+    let err = io::copy(&mut verifier, &mut io::sink()).unwrap_err();
+    assert_eq!(err.kind(), io::ErrorKind::InvalidData);
 }
