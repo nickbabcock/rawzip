@@ -408,7 +408,7 @@ fn descriptor_cross_check_rejects_descriptor_divergence() {
 fn corrupt_descriptor_compressed_size(data: &mut [u8]) -> (u64, u64) {
     let archive = ZipArchive::from_slice(&*data).unwrap();
     let entry = archive.entries().next_entry().unwrap().unwrap();
-    assert!(entry.has_data_descriptor());
+    assert!(entry.flags().has_data_descriptor());
     let ent = archive.get_entry(entry.wayfinder()).unwrap();
 
     let (_, compressed_data_end) = ent.compressed_data_range();

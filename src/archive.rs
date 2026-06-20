@@ -2107,7 +2107,7 @@ mod tests {
             signature: 0x0201_4b50,
             version_made_by: 0,
             version_needed: 0,
-            flags: 0x08,
+            flags: EntryFlags::new(0x08),
             compression_method: CompressionMethodId(0),
             last_mod_time: 0,
             last_mod_date: 0,
