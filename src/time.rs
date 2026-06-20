@@ -110,8 +110,14 @@ pub struct Utc;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Local;
 
-/// Trait for timezone markers
-pub trait TimeZoneMarker {
+mod sealed {
+    pub trait Sealed {}
+    impl Sealed for super::Utc {}
+    impl Sealed for super::Local {}
+}
+
+/// Trait for timezone markers (sealed).
+pub trait TimeZoneMarker: sealed::Sealed {
     fn timezone() -> TimeZone;
 }
 
