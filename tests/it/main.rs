@@ -1,7 +1,7 @@
 use quickcheck_macros::quickcheck;
 use rawzip::extra_fields::ExtraFieldId;
 use rawzip::time::{LocalDateTime, UtcDateTime, ZipDateTimeKind};
-use rawzip::{Error, ErrorKind, ZipArchive};
+use rawzip::{Error, ErrorKind, ZipArchive, ZipArchiveWriter};
 use std::fs::File;
 use std::io::{Cursor, Read, Seek, SeekFrom};
 use std::path::Path;
@@ -1192,4 +1192,52 @@ fn test_ff_optimized_jar_reader() {
     let count = std::io::copy(&mut reader, &mut std::io::sink()).unwrap();
     assert_eq!(first.uncompressed_size_hint(), count);
     entries.next_entry().unwrap_err();
+}
+
+/// An archive whose single entry has the largest central directory record the
+/// format permits.
+#[test]
+fn oversized_entry_needs_max_central_directory_buffer() {
+    let name = "a".repeat(u16::MAX as usize);
+    let comment = vec![b'c'; u16::MAX as usize];
+    let extra = vec![0u8; u16::MAX as usize - 4];
+
+    let mut output = Vec::new();
+    let mut writer = ZipArchiveWriter::new(&mut output);
+    let (entry, config) = writer
+        .new_file(&name)
+        .compression_method(rawzip::CompressionMethod::Store)
+        .extra_field(ExtraFieldId::new(0xcafe), &extra, rawzip::Header::CENTRAL)
+        .unwrap()
+        .comment(comment)
+        .start()
+        .unwrap();
+    let (entry, descriptor) = config.wrap(entry).finish().unwrap();
+    entry.finish(descriptor).unwrap();
+    writer.finish().unwrap();
+
+    // A buffer sized to RECOMMENDED_BUFFER_SIZE is too small
+    let mut small = vec![0u8; rawzip::RECOMMENDED_BUFFER_SIZE];
+    let archive = rawzip::ZipLocator::new()
+        .locate_in_reader(output.as_slice(), &mut small, output.len() as u64)
+        .unwrap();
+    let mut entries = archive.entries(&mut small);
+    let err = entries.next_entry().unwrap_err();
+    assert!(matches!(err.kind(), rawzip::ErrorKind::BufferTooSmall));
+
+    // A buffer sized to MAX_CENTRAL_DIRECTORY_RECORD_SIZE parses it.
+    let mut large = vec![0u8; rawzip::MAX_CENTRAL_DIRECTORY_RECORD_SIZE];
+    let archive = rawzip::ZipLocator::new()
+        .locate_in_reader(output.as_slice(), &mut large, output.len() as u64)
+        .unwrap();
+    let mut entries = archive.entries(&mut large);
+    let entry = entries.next_entry().unwrap().expect("entry present");
+    assert_eq!(entry.file_path().as_bytes().len(), u16::MAX as usize);
+    assert!(entries.next_entry().unwrap().is_none());
+
+    // The slice reader has no problem parsing it either
+    let slice_archive = ZipArchive::from_slice(&output).unwrap();
+    let mut slice_entries = slice_archive.entries();
+    let slice_entry = slice_entries.next_entry().unwrap().expect("entry present");
+    assert_eq!(slice_entry.file_path().as_bytes().len(), u16::MAX as usize);
 }
