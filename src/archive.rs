@@ -238,39 +238,38 @@ impl<'a> ZipSliceEntry<'a> {
         (compressed_data_start, compressed_data_end)
     }
 
-    /// Returns an iterator over the extra fields from the local file header.
+    /// Returns the local file header information.
     ///
-    /// See [`ZipLocalFileHeader`] for more details.
-    pub fn extra_fields(&self) -> ExtraFields<'_> {
+    /// This is the single entry point for the entry's file path, extra fields,
+    /// and flags, mirroring [`ZipEntry::local_header`] on the reader-based
+    /// archive.
+    ///
+    /// ```rust
+    /// # use rawzip::{ZipArchive, Error};
+    /// # fn example(data: &[u8]) -> Result<(), Error> {
+    /// let archive = ZipArchive::from_slice(data)?;
+    /// let entry_header = archive.entries().next_entry()?.unwrap();
+    /// let entry = archive.get_entry(entry_header.wayfinder())?;
+    /// let header = entry.local_header();
+    /// let _path = header.file_path();
+    /// let _flags = header.flags();
+    /// for (_id, _field) in header.extra_fields() {}
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn local_header(&self) -> ZipLocalFileHeader<'a> {
         let header =
             ZipLocalFileHeaderFixed::parse(self.data).expect("header has already been parsed");
         let file_name_len = header.file_name_len as usize;
         let extra_field_len = header.extra_field_len as usize;
-        let extra_field_start = ZipLocalFileHeaderFixed::SIZE + file_name_len;
-        let extra_field_end = extra_field_start + extra_field_len;
-        ExtraFields::new(&self.data[extra_field_start..extra_field_end])
-    }
-
-    /// Returns the file path from the local file header.
-    ///
-    /// See [`ZipLocalFileHeader`] for more details.
-    pub fn file_path(&self) -> ZipFilePath<RawPath<'_>> {
-        let header =
-            ZipLocalFileHeaderFixed::parse(self.data).expect("header has already been parsed");
-        let file_name_len = header.file_name_len as usize;
         let filename_start = ZipLocalFileHeaderFixed::SIZE;
         let filename_end = filename_start + file_name_len;
-        ZipFilePath::from_bytes(&self.data[filename_start..filename_end])
-    }
-
-    /// Returns the general purpose bit flags from the local file header.
-    ///
-    /// These may differ from the central directory record's flags. See
-    /// [`EntryFlags`] for the individual flag accessors.
-    pub fn flags(&self) -> EntryFlags {
-        let header =
-            ZipLocalFileHeaderFixed::parse(self.data).expect("header has already been parsed");
-        header.flags
+        let extra_field_end = filename_end + extra_field_len;
+        ZipLocalFileHeader {
+            flags: header.flags,
+            file_path: ZipFilePath::from_bytes(&self.data[filename_start..filename_end]),
+            extra_fields: ExtraFields::new(&self.data[filename_end..extra_field_end]),
+        }
     }
 }
 
@@ -949,7 +948,7 @@ where
 ///
 /// Most ZIP tools use the central directory as authoritative, but access to local
 /// header data is useful for validation, security analysis, and forensic purposes.
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ZipLocalFileHeader<'a> {
     flags: EntryFlags,
     file_path: ZipFilePath<RawPath<'a>>,
