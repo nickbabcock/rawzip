@@ -31,6 +31,7 @@ The reason is to prevent breaking changes in the future by properly modeling unk
 - Un-deprecate `ZipSliceArchive::into_reader`, now constrained to `T: ReaderAt`
 - Rename `ZipSliceArchive::into_zip_archive` to `into_cursor_archive`
 - Remove `MissingZip64EndOfCentralDirectory` error kind as it is no longer possible to trigger
+- Relocate `ZipSliceEntry::{file_path,extra_fields}` behind lifetime accurate `ZipSliceEntry::local_header`
 - Seal `TimeZoneMarker` trait
 
 ### Performance
