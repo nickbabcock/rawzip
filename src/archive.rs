@@ -8,7 +8,7 @@ use crate::mode::{
 };
 use crate::path::{RawPath, ZipFilePath};
 use crate::reader_at::{FileReader, MutexReader, RangeReader, ReaderAt, ReaderAtExt};
-use crate::time::{ZipDateTimeKind, extract_best_timestamp};
+use crate::time::{DosDateTime, ZipDateTimeKind, extract_best_timestamp};
 use crate::utils::{le_u16, le_u32, le_u64};
 use crate::{EndOfCentralDirectory, EndOfCentralDirectoryRecordFixed, ZipLocator};
 use std::io::{Read, Seek, Write};
@@ -283,6 +283,8 @@ impl<'a> ZipSliceEntry<'a> {
         let extra_field_end = filename_end + extra_field_len;
         ZipLocalFileHeader {
             flags: header.flags,
+            last_mod_time: header.last_mod_time,
+            last_mod_date: header.last_mod_date,
             file_path: ZipFilePath::from_bytes(&self.data[filename_start..filename_end]),
             extra_fields: ExtraFields::new(&self.data[filename_end..extra_field_end]),
         }
@@ -818,6 +820,8 @@ where
         let (filename_data, extra_field_data) = variable_data.split_at(file_name_len);
         Ok(ZipLocalFileHeader {
             flags: local_header_fixed.flags,
+            last_mod_time: local_header_fixed.last_mod_time,
+            last_mod_date: local_header_fixed.last_mod_date,
             file_path: ZipFilePath::from_bytes(filename_data),
             extra_fields: ExtraFields::new(extra_field_data),
         })
@@ -967,6 +971,8 @@ where
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ZipLocalFileHeader<'a> {
     flags: EntryFlags,
+    last_mod_time: u16,
+    last_mod_date: u16,
     file_path: ZipFilePath<RawPath<'a>>,
     extra_fields: ExtraFields<'a>,
 }
@@ -987,6 +993,15 @@ impl<'a> ZipLocalFileHeader<'a> {
     #[inline]
     pub fn file_path(&self) -> ZipFilePath<RawPath<'a>> {
         self.file_path
+    }
+
+    /// Returns the raw MS-DOS modification timestamp from the local file header.
+    ///
+    /// This may differ from the central directory record's
+    /// [`last_modified_dos`](ZipFileHeaderRecord::last_modified_dos).
+    #[inline]
+    pub fn last_modified_dos(&self) -> DosDateTime {
+        DosDateTime::new(self.last_mod_time, self.last_mod_date)
     }
 
     /// Returns an iterator over the extra fields from the local file header.
@@ -1706,6 +1721,17 @@ impl<'a> ZipFileHeaderRecord<'a> {
     #[inline]
     pub fn last_modified(&self) -> ZipDateTimeKind {
         extract_best_timestamp(self.extra_fields(), self.last_mod_time, self.last_mod_date)
+    }
+
+    /// Returns the raw MS-DOS modification timestamp stored in the central
+    /// directory record.
+    ///
+    /// Unlike [`last_modified`](Self::last_modified), this is the raw value from
+    /// the header, and ignores any higher-resolution Extended Timestamp
+    /// extra field.
+    #[inline]
+    pub fn last_modified_dos(&self) -> DosDateTime {
+        DosDateTime::new(self.last_mod_time, self.last_mod_date)
     }
 
     /// Returns the file mode information extracted from the external file attributes.

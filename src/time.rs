@@ -532,10 +532,42 @@ impl DosDateTime {
         raw_second.min(58)
     }
 
-    /// Returns the packed time and date components as (time, date).
+    /// Returns the raw packed MS-DOS time word (bits 15-11: hour, 10-5: minute,
+    /// 4-0: second/2).
+    ///
+    /// This is the unparsed on-disk value; use [`hour`](Self::hour) and friends
+    /// for decoded components.
+    ///
+    /// ```
+    /// use rawzip::time::{DosDateTime, UtcDateTime};
+    ///
+    /// let dt = UtcDateTime::from_components(2023, 6, 15, 14, 30, 44, 0).unwrap();
+    /// let dos = DosDateTime::from(&dt);
+    /// // hour << 11 | minute << 5 | second / 2
+    /// assert_eq!(dos.packed_time(), (14 << 11) | (30 << 5) | 22);
+    /// ```
     #[must_use]
-    pub(crate) const fn into_parts(self) -> (u16, u16) {
-        (self.time, self.date)
+    pub const fn packed_time(&self) -> u16 {
+        self.time
+    }
+
+    /// Returns the raw packed MS-DOS date word (bits 15-9: year-1980, 8-5:
+    /// month, 4-0: day).
+    ///
+    /// This is the unparsed on-disk value; use [`year`](Self::year) and friends
+    /// for decoded components.
+    ///
+    /// ```
+    /// use rawzip::time::{DosDateTime, UtcDateTime};
+    ///
+    /// let dt = UtcDateTime::from_components(2023, 6, 15, 14, 30, 44, 0).unwrap();
+    /// let dos = DosDateTime::from(&dt);
+    /// // (year - 1980) << 9 | month << 5 | day
+    /// assert_eq!(dos.packed_date(), (43 << 9) | (6 << 5) | 15);
+    /// ```
+    #[must_use]
+    pub const fn packed_date(&self) -> u16 {
+        self.date
     }
 }
 
@@ -776,15 +808,13 @@ mod tests {
         // Test normal conversion
         let zip_dt = utc_from_components(2023, 6, 15, 14, 30, 45, 0);
         let dos_dt: DosDateTime = (&zip_dt).into();
-        let (dos_time, dos_date) = dos_dt.into_parts();
-        let dos_dt_check = DosDateTime::new(dos_time, dos_date);
 
-        assert_eq!(dos_dt_check.year(), 2023);
-        assert_eq!(dos_dt_check.month(), 6);
-        assert_eq!(dos_dt_check.day(), 15);
-        assert_eq!(dos_dt_check.hour(), 14);
-        assert_eq!(dos_dt_check.minute(), 30);
-        assert_eq!(dos_dt_check.second(), 44); // Rounded down to even second
+        assert_eq!(dos_dt.year(), 2023);
+        assert_eq!(dos_dt.month(), 6);
+        assert_eq!(dos_dt.day(), 15);
+        assert_eq!(dos_dt.hour(), 14);
+        assert_eq!(dos_dt.minute(), 30);
+        assert_eq!(dos_dt.second(), 44); // Rounded down to even second
     }
 
     #[test]
@@ -792,34 +822,26 @@ mod tests {
         // Test year before DOS range (should saturate to 1980)
         let zip_dt_before = utc_from_components(1979, 6, 15, 14, 30, 45, 0);
         let dos_dt: DosDateTime = (&zip_dt_before).into();
-        let (dos_time, dos_date) = dos_dt.into_parts();
-        let dos_dt_check = DosDateTime::new(dos_time, dos_date);
-        assert_eq!(dos_dt_check.year(), 1980); // Saturated to minimum
-        assert_eq!(dos_dt_check.month(), 6);
-        assert_eq!(dos_dt_check.day(), 15);
+        assert_eq!(dos_dt.year(), 1980); // Saturated to minimum
+        assert_eq!(dos_dt.month(), 6);
+        assert_eq!(dos_dt.day(), 15);
 
         // Test year way before DOS range
         let zip_dt_way_before = utc_from_components(1800, 1, 1, 0, 0, 0, 0);
         let dos_dt2: DosDateTime = (&zip_dt_way_before).into();
-        let (dos_time2, dos_date2) = dos_dt2.into_parts();
-        let dos_dt2_check = DosDateTime::new(dos_time2, dos_date2);
-        assert_eq!(dos_dt2_check.year(), 1980); // Saturated to minimum
+        assert_eq!(dos_dt2.year(), 1980); // Saturated to minimum
 
         // Test year after DOS range (should saturate to 2107)
         let zip_dt_after = utc_from_components(2108, 6, 15, 14, 30, 45, 0);
         let dos_dt3: DosDateTime = (&zip_dt_after).into();
-        let (dos_time3, dos_date3) = dos_dt3.into_parts();
-        let dos_dt3_check = DosDateTime::new(dos_time3, dos_date3);
-        assert_eq!(dos_dt3_check.year(), 2107); // Saturated to maximum
-        assert_eq!(dos_dt3_check.month(), 6);
-        assert_eq!(dos_dt3_check.day(), 15);
+        assert_eq!(dos_dt3.year(), 2107); // Saturated to maximum
+        assert_eq!(dos_dt3.month(), 6);
+        assert_eq!(dos_dt3.day(), 15);
 
         // Test year way after DOS range
         let zip_dt_way_after = utc_from_components(3000, 12, 31, 23, 59, 59, 0);
         let dos_dt4: DosDateTime = (&zip_dt_way_after).into();
-        let (dos_time4, dos_date4) = dos_dt4.into_parts();
-        let dos_dt4_check = DosDateTime::new(dos_time4, dos_date4);
-        assert_eq!(dos_dt4_check.year(), 2107); // Saturated to maximum
+        assert_eq!(dos_dt4.year(), 2107); // Saturated to maximum
     }
 
     #[test]

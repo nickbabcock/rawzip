@@ -401,3 +401,50 @@ fn assert_extend_time_extra_field_difference(mut central: ExtraFields, mut local
         "Local header should have 9 bytes (mod + access times) and have richer timestamp data than central directory"
     );
 }
+
+#[test]
+fn test_last_modified_dos_raw_packed_fields() {
+    let datetime = UtcDateTime::from_components(2023, 6, 15, 14, 30, 45, 0).unwrap();
+    let mut output = Vec::new();
+
+    {
+        let mut archive = ZipArchiveWriter::new(&mut output);
+        let (mut entry, config) = archive
+            .new_file("test.txt")
+            .last_modified(datetime)
+            .start()
+            .unwrap();
+        let mut writer = config.wrap(&mut entry);
+        writer.write_all(b"Hello, world!").unwrap();
+        let (_, descriptor) = writer.finish().unwrap();
+        entry.finish(descriptor).unwrap();
+        archive.finish().unwrap();
+    }
+
+    let archive = ZipArchive::from_slice(&output).unwrap();
+    let mut entries = archive.entries();
+    let entry = entries.next_entry().unwrap().unwrap();
+
+    let dos = entry.last_modified_dos();
+
+    // Decoded components. DOS seconds have 2-second precision, so 45 -> 44.
+    assert_eq!(dos.year(), 2023);
+    assert_eq!(dos.month(), 6);
+    assert_eq!(dos.day(), 15);
+    assert_eq!(dos.hour(), 14);
+    assert_eq!(dos.minute(), 30);
+    assert_eq!(dos.second(), 44);
+
+    // Raw packed words, matching the on-disk bit layout:
+    //   date = (year - 1980) << 9 | month << 5 | day
+    //   time = hour << 11 | minute << 5 | second / 2
+    assert_eq!(dos.packed_date(), ((2023 - 1980) << 9) | (6 << 5) | 15);
+    assert_eq!(dos.packed_time(), (14 << 11) | (30 << 5) | (45 / 2));
+
+    // The local file header carries the same raw DOS timestamp, which a
+    // streaming reader can read without consulting the central directory.
+    let local = archive.get_entry(entry.wayfinder()).unwrap().local_header();
+    let local_dos = local.last_modified_dos();
+    assert_eq!(local_dos.packed_date(), dos.packed_date());
+    assert_eq!(local_dos.packed_time(), dos.packed_time());
+}
