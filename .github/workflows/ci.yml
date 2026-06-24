@@ -45,7 +45,9 @@ jobs:
       with:
         toolchain: ${{ matrix.rust }}
     - run: cargo build --all-targets --verbose
-    - run: cargo doc --verbose
+    - run: cargo doc --no-deps --verbose
+      env:
+        RUSTDOCFLAGS: "-D warnings"
     - run: cargo test --verbose --all
 
   # stripped down version of CI to test the MSRV.
