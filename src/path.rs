@@ -335,7 +335,7 @@ impl From<ZipFilePath<NormalizedPath<'_>>> for String {
     }
 }
 
-impl ZipFilePath<NormalizedPath<'_>> {
+impl<'a> ZipFilePath<NormalizedPath<'a>> {
     /// Returns the normalized string slice.
     #[inline]
     pub fn as_str(&self) -> &str {
@@ -349,6 +349,28 @@ impl ZipFilePath<NormalizedPath<'_>> {
     pub fn into_owned(self) -> ZipFilePath<NormalizedPathBuf> {
         ZipFilePath {
             data: NormalizedPathBuf(self.data.0.into_owned()),
+        }
+    }
+
+    /// Strips a single trailing slash, if present, so the path is treated as a
+    /// file rather than a directory.
+    ///
+    /// Normalization collapses any run of trailing separators into a single
+    /// `/`, so removing one slash is sufficient. The original borrow is
+    /// preserved when possible.
+    #[inline]
+    pub(crate) fn trim_trailing_slash(self) -> ZipFilePath<NormalizedPath<'a>> {
+        let data = match self.data.0 {
+            Cow::Borrowed(s) => Cow::Borrowed(s.strip_suffix('/').unwrap_or(s)),
+            Cow::Owned(mut s) => {
+                if s.ends_with('/') {
+                    s.pop();
+                }
+                Cow::Owned(s)
+            }
+        };
+        ZipFilePath {
+            data: NormalizedPath(data),
         }
     }
 }
