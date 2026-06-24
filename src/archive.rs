@@ -16,14 +16,30 @@ use std::io::{Read, Seek, Write};
 pub(crate) const END_OF_CENTRAL_DIR_SIGNATURE64: u32 = 0x06064b50;
 pub(crate) const END_OF_CENTRAL_DIR_LOCATOR_SIGNATURE: u32 = 0x07064b50;
 pub(crate) const CENTRAL_HEADER_SIGNATURE: u32 = 0x02014b50;
+
 /// The recommended buffer size to use when reading from a zip file.
 ///
-/// This buffer size was chosen as it can hold an entire central directory
-/// record as the spec states (4.4.10):
+/// A buffer of this size should hold an entire central directory record as the
+/// spec recommends (4.4.10):
 ///
 /// > the combined length of any directory and these three fields SHOULD NOT
 /// > generally exceed 65,535 bytes.
+///
+/// However, a pathological central directory record can still exceed this size
+/// causing [`ErrorKind::BufferTooSmall`] to be returned when parsing entries.
+/// [`MAX_CENTRAL_DIRECTORY_RECORD_SIZE`] can be used to avoid this error.
 pub const RECOMMENDED_BUFFER_SIZE: usize = 1 << 16;
+
+/// The maximum size in bytes of a single central directory file header record.
+///
+/// - Fixed-size: 46 bytes
+/// - file name, comment, and extra data can each be up to 65,535 bytes
+///
+/// A buffer of this size guarantees [`ErrorKind::BufferTooSmall`] can never
+/// occur. At roughly 192 KiB, it is still small enough to be reasonable for
+/// most use cases.
+pub const MAX_CENTRAL_DIRECTORY_RECORD_SIZE: usize =
+    ZipFileHeaderFixed::SIZE + 3 * u16::MAX as usize;
 
 /// Represents a Zip archive that operates on an in-memory data.
 ///
