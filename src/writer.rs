@@ -606,7 +606,10 @@ where
         let (dos_time, dos_date) = options
             .modification_time
             .as_ref()
-            .map(|dt| DosDateTime::from(dt).into_parts())
+            .map(|dt| {
+                let dos = DosDateTime::from(dt);
+                (dos.packed_time(), dos.packed_date())
+            })
             .unwrap_or((0, 0));
 
         if let Some(datetime) = options.modification_time.as_ref() {
@@ -847,7 +850,10 @@ where
             let (dos_time, dos_date) = file
                 .modification_time
                 .as_ref()
-                .map(|dt| DosDateTime::from(dt).into_parts())
+                .map(|dt| {
+                    let dos = DosDateTime::from(dt);
+                    (dos.packed_time(), dos.packed_date())
+                })
                 .unwrap_or((0, 0));
 
             let header = ZipFileHeaderFixed {
