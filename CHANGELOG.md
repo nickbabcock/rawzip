@@ -45,6 +45,7 @@ The reason is to prevent breaking changes in the future by properly modeling unk
 - Add `EntryFlags` to expose the general purpose bit flags on file entries
 - Add `ZipFileHeaderRecord::comment` for zip entry central directory comment
 - Add ability to write archive and central directory comments
+- Add flags and DOS time accessors after local header is written
 - Add `MAX_CENTRAL_DIRECTORY_RECORD_SIZE` to size buffers according to pathologically large central directories 
 - Built-in CRC/size verification is now central-directory authoritative and never reads the trailing data descriptor to bring rawzip in line with other zip file libraries
 - Add functions for extracting zip entry data descriptors for those that want to cross validate values 
