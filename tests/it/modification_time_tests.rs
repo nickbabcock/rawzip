@@ -79,6 +79,11 @@ fn test_no_modification_time_defaults_to_zero() {
     {
         let mut archive = ZipArchiveWriter::new(&mut output);
         let (mut entry, config) = archive.new_file("test.txt").start().unwrap();
+
+        // With no modification time, the writer stores a zeroed DOS timestamp.
+        assert_eq!(entry.last_modified_dos().packed_time(), 0);
+        assert_eq!(entry.last_modified_dos().packed_date(), 0);
+
         let mut writer = config.wrap(&mut entry);
         writer.write_all(b"Hello, world!").unwrap();
         let (_, descriptor) = writer.finish().unwrap();
@@ -414,6 +419,12 @@ fn test_last_modified_dos_raw_packed_fields() {
             .last_modified(datetime)
             .start()
             .unwrap();
+
+        assert!(entry.flags().has_data_descriptor());
+        let written = entry.last_modified_dos();
+        assert_eq!(written.packed_date(), ((2023 - 1980) << 9) | (6 << 5) | 15);
+        assert_eq!(written.packed_time(), (14 << 11) | (30 << 5) | (45 / 2));
+
         let mut writer = config.wrap(&mut entry);
         writer.write_all(b"Hello, world!").unwrap();
         let (_, descriptor) = writer.finish().unwrap();

@@ -602,15 +602,11 @@ where
         compression_method: CompressionMethod,
         options: &mut ZipEntryOptions,
     ) -> Result<(), Error> {
-        // Get DOS timestamp from options or use 0 as default
-        let (dos_time, dos_date) = options
+        let dos = options
             .modification_time
             .as_ref()
-            .map(|dt| {
-                let dos = DosDateTime::from(dt);
-                (dos.packed_time(), dos.packed_date())
-            })
-            .unwrap_or((0, 0));
+            .map(DosDateTime::from)
+            .unwrap_or_default();
 
         if let Some(datetime) = options.modification_time.as_ref() {
             let unix_time = datetime.to_unix().max(0) as u32;
@@ -629,8 +625,8 @@ where
             version_needed: 20,
             flags: EntryFlags::new(flags),
             compression_method: compression_method.as_id(),
-            last_mod_time: dos_time,
-            last_mod_date: dos_date,
+            last_mod_time: dos.packed_time(),
+            last_mod_date: dos.packed_date(),
             crc32: 0, // must be zero if data descriptor is used (4.4.4)
             compressed_size: 0,
             uncompressed_size: 0,
@@ -847,14 +843,11 @@ where
             let version_made_by_hi = file.unix_permissions.map(|_| CREATOR_UNIX).unwrap_or(0);
             let version_made_by = (version_made_by_hi << 8) | version_needed;
 
-            let (dos_time, dos_date) = file
+            let dos = file
                 .modification_time
                 .as_ref()
-                .map(|dt| {
-                    let dos = DosDateTime::from(dt);
-                    (dos.packed_time(), dos.packed_date())
-                })
-                .unwrap_or((0, 0));
+                .map(DosDateTime::from)
+                .unwrap_or_default();
 
             let header = ZipFileHeaderFixed {
                 signature: CENTRAL_HEADER_SIGNATURE,
@@ -862,8 +855,8 @@ where
                 version_needed,
                 flags: EntryFlags::new(file.flags),
                 compression_method: file.compression_method.as_id(),
-                last_mod_time: dos_time,
-                last_mod_date: dos_date,
+                last_mod_time: dos.packed_time(),
+                last_mod_date: dos.packed_date(),
                 crc32: file.crc,
                 compressed_size: file.compressed_size.min(ZIP64_THRESHOLD_FILE_SIZE) as u32,
                 uncompressed_size: file.uncompressed_size.min(ZIP64_THRESHOLD_FILE_SIZE) as u32,
@@ -989,6 +982,24 @@ impl<'a, W> ZipEntryWriter<'a, W> {
     /// See [`ZipArchiveWriter::stream_offset`] for more information.
     pub fn stream_offset(&self) -> u64 {
         self.inner.stream_offset()
+    }
+
+    /// Returns the general purpose bit flags written to this entry's local
+    /// header.
+    pub fn flags(&self) -> EntryFlags {
+        EntryFlags::new(self.flags)
+    }
+
+    /// Returns the MS-DOS modification time as actually stored in this entry's
+    /// local header.
+    ///
+    /// Mirrors [`ZipFileHeaderRecord::last_modified_dos`](crate::ZipFileHeaderRecord::last_modified_dos)
+    /// on the reader side.
+    pub fn last_modified_dos(&self) -> DosDateTime {
+        self.modification_time
+            .as_ref()
+            .map(DosDateTime::from)
+            .unwrap_or_default()
     }
 
     /// Finishes writing the file entry.
