@@ -478,7 +478,7 @@ impl ZipDateTime<Local> {
 ///
 /// MS-DOS timestamps are stored as packed 16-bit values for date and time,
 /// with a limited range from 1980 to 2107 and 2-second precision for seconds.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub struct DosDateTime {
     time: u16,
     date: u16,
