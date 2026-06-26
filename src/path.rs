@@ -263,28 +263,19 @@ where
     }
 }
 
-impl<R> ZipFilePath<R>
-where
-    R: AsRef<str>,
-{
-    /// Determines if the path requires UTF-8 encoding based on CP-437 compatibility.
-    ///
-    /// Returns `true` if the path contains characters that cannot be represented in CP-437
-    /// (the default ZIP encoding), requiring the UTF-8 flag to be set in the ZIP file.
-    pub(crate) fn needs_utf8_encoding(&self) -> bool {
-        for ch in self.data.as_ref().chars() {
-            let code_point = ch as u32;
+pub(crate) fn str_needs_utf8(s: &str) -> bool {
+    for ch in s.chars() {
+        let code_point = ch as u32;
 
-            // Forbid 0x7e (~) and 0x5c (\) since EUC-KR and Shift-JIS replace those
-            // characters with localized currency and overline characters.
-            // Also forbid control characters (< 0x20) and characters above 0x7d.
-            if !(0x20..=0x7d).contains(&code_point) || code_point == 0x5c {
-                return true;
-            }
+        // Forbid 0x7e (~) and 0x5c (\) since EUC-KR and Shift-JIS replace those
+        // characters with localized currency and overline characters.
+        // Also forbid control characters (< 0x20) and characters above 0x7d.
+        if !(0x20..=0x7d).contains(&code_point) || code_point == 0x5c {
+            return true;
         }
-
-        false
     }
+
+    false
 }
 
 impl<'a> ZipFilePath<RawPath<'a>> {
@@ -367,6 +358,89 @@ impl ZipFilePath<NormalizedPathBuf> {
     #[inline]
     pub fn as_str(&self) -> &str {
         self.data.0.as_ref()
+    }
+}
+
+/// Controls how an entry name is written.
+///
+/// - [`EntryName::conformant`] normalizes UTF-8 text and sets the
+///   [`EntryFlags::is_utf8`](crate::EntryFlags::is_utf8) flag when needed.
+/// - [`EntryName::verbatim`] writes uninterpreted bytes without that flag.
+///
+/// # Examples
+///
+/// ```rust
+/// use rawzip::EntryName;
+///
+/// // A UTF-8 path, normalized on write.
+/// let name = EntryName::conformant("docs/readme.txt");
+///
+/// // Exact bytes, no normalization, no UTF-8 flag.
+/// let name = EntryName::verbatim(b"odd\x05name");
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EntryName<'a>(pub(crate) EntryNameInner<'a>);
+
+/// The private name-writing policy.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum EntryNameInner<'a> {
+    /// Normalize UTF-8 text and set utf-8 flag when needed.
+    Conformant(Cow<'a, str>),
+    /// UTF-8 text already normalized by the reader.
+    Normalized(Cow<'a, str>),
+    /// Uninterpreted bytes without utf-8 flag.
+    Verbatim(Cow<'a, [u8]>),
+}
+
+impl<'a> EntryName<'a> {
+    /// Creates a normalized UTF-8 name, setting utf-8 flag when needed.
+    #[inline]
+    pub fn conformant<S: Into<Cow<'a, str>>>(name: S) -> Self {
+        EntryName(EntryNameInner::Conformant(name.into()))
+    }
+
+    /// Creates an exact, uninterpreted name without utf-8 flag.
+    #[inline]
+    pub fn verbatim<B: Into<Cow<'a, [u8]>>>(name: B) -> Self {
+        EntryName(EntryNameInner::Verbatim(name.into()))
+    }
+}
+
+impl<'a, T> From<&'a T> for EntryName<'a>
+where
+    T: AsRef<str> + ?Sized,
+{
+    #[inline]
+    fn from(value: &'a T) -> Self {
+        EntryName::conformant(value.as_ref())
+    }
+}
+
+impl<'a> From<String> for EntryName<'a> {
+    #[inline]
+    fn from(value: String) -> Self {
+        EntryName::conformant(value)
+    }
+}
+
+impl<'a> From<Cow<'a, str>> for EntryName<'a> {
+    #[inline]
+    fn from(value: Cow<'a, str>) -> Self {
+        EntryName::conformant(value)
+    }
+}
+
+impl<'a> From<ZipFilePath<NormalizedPath<'a>>> for EntryName<'a> {
+    #[inline]
+    fn from(value: ZipFilePath<NormalizedPath<'a>>) -> Self {
+        EntryName(EntryNameInner::Normalized(value.data.0))
+    }
+}
+
+impl<'a> From<ZipFilePath<NormalizedPathBuf>> for EntryName<'a> {
+    #[inline]
+    fn from(value: ZipFilePath<NormalizedPathBuf>) -> Self {
+        EntryName(EntryNameInner::Normalized(Cow::Owned(value.data.0)))
     }
 }
 
@@ -457,7 +531,7 @@ mod tests {
     fn test_needs_utf8_encoding(#[case] input: &str, #[case] expected: bool) {
         let path = ZipFilePath::from_str(input);
         assert_eq!(
-            path.needs_utf8_encoding(),
+            str_needs_utf8(path.as_str()),
             expected,
             "Failed for input: {input}"
         );

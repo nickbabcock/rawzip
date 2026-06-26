@@ -6,7 +6,7 @@ use crate::{
     errors::ErrorKind,
     extra_fields::{ExtraFieldId, ExtraFieldsContainer},
     mode::CREATOR_UNIX,
-    path::{NormalizedPath, ZipFilePath},
+    path::{EntryName, EntryNameInner, ZipFilePath, str_needs_utf8},
     time::{DosDateTime, UtcDateTime},
 };
 use std::io::{self, Write};
@@ -24,6 +24,34 @@ const FLAG_UTF8_ENCODING: u16 = 0x800; // bit 11: UTF-8 encoding flag (EFS)
 const ZIP64_THRESHOLD_FILE_SIZE: u64 = u32::MAX as u64;
 const ZIP64_THRESHOLD_OFFSET: u64 = u32::MAX as u64;
 const ZIP64_THRESHOLD_ENTRIES: usize = u16::MAX as usize;
+
+fn with_resolved_entry_name<T>(
+    name: EntryName<'_>,
+    trim_trailing_slash: bool,
+    write: impl FnOnce(&[u8], bool) -> T,
+) -> T {
+    match name.0 {
+        EntryNameInner::Conformant(name) => {
+            let name = if trim_trailing_slash {
+                name.trim_end_matches('/')
+            } else {
+                &name
+            };
+            let path = ZipFilePath::from_str(name);
+            let name = path.as_str();
+            write(name.as_bytes(), str_needs_utf8(name))
+        }
+        EntryNameInner::Normalized(name) => {
+            let name = if trim_trailing_slash {
+                name.trim_end_matches('/')
+            } else {
+                &name
+            };
+            write(name.as_bytes(), str_needs_utf8(name))
+        }
+        EntryNameInner::Verbatim(name) => write(&name, false),
+    }
+}
 
 #[derive(Debug)]
 struct CountWriter<W> {
@@ -264,7 +292,7 @@ impl Crc32Option {
 #[derive(Debug)]
 pub struct ZipFileBuilder<'archive, 'name, W> {
     archive: &'archive mut ZipArchiveWriter<W>,
-    name: &'name str,
+    name: EntryName<'name>,
     compression_method: CompressionMethod,
     modification_time: Option<UtcDateTime>,
     unix_permissions: Option<u32>,
@@ -521,7 +549,7 @@ where
 #[derive(Debug)]
 pub struct ZipDirBuilder<'a, W> {
     archive: &'a mut ZipArchiveWriter<W>,
-    name: &'a str,
+    name: EntryName<'a>,
     modification_time: Option<UtcDateTime>,
     unix_permissions: Option<u32>,
     extra_fields: ExtraFieldsContainer,
@@ -597,7 +625,7 @@ where
     /// Writes a local file header with filtered extra fields.
     fn write_local_header(
         &mut self,
-        file_path: &ZipFilePath<NormalizedPath>,
+        name_bytes: &[u8],
         flags: u16,
         compression_method: CompressionMethod,
         options: &mut ZipEntryOptions,
@@ -630,12 +658,12 @@ where
             crc32: 0, // must be zero if data descriptor is used (4.4.4)
             compressed_size: 0,
             uncompressed_size: 0,
-            file_name_len: file_path.len() as u16,
+            file_name_len: name_bytes.len() as u16,
             extra_field_len: options.extra_fields.local_size,
         };
 
         header.write(&mut self.writer)?;
-        self.writer.write_all(file_path.as_ref().as_bytes())?;
+        self.writer.write_all(name_bytes)?;
         options
             .extra_fields
             .write_extra_fields(&mut self.writer, Header::LOCAL)?;
@@ -644,7 +672,7 @@ where
 
     /// Creates a builder for adding a new directory to the archive.
     ///
-    /// The name of the directory must end with a `/`.
+    /// The name must end with `/`, including for [`EntryName::verbatim`].
     ///
     /// # Example
     ///
@@ -658,10 +686,10 @@ where
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     #[must_use]
-    pub fn new_dir<'a>(&'a mut self, name: &'a str) -> ZipDirBuilder<'a, W> {
+    pub fn new_dir<'a>(&'a mut self, name: impl Into<EntryName<'a>>) -> ZipDirBuilder<'a, W> {
         ZipDirBuilder {
             archive: self,
-            name,
+            name: name.into(),
             modification_time: None,
             unix_permissions: None,
             extra_fields: ExtraFieldsContainer::new(),
@@ -674,38 +702,43 @@ where
     /// The name of the directory must end with a `/`.
     fn new_dir_with_options(
         &mut self,
-        name: &str,
+        name: EntryName<'_>,
+        options: ZipEntryOptions,
+    ) -> Result<(), Error> {
+        with_resolved_entry_name(name, false, |name, needs_utf8| {
+            self.write_dir_entry(name, needs_utf8, options)
+        })
+    }
+
+    /// Writes a directory using resolved name bytes.
+    fn write_dir_entry(
+        &mut self,
+        name_bytes: &[u8],
+        needs_utf8: bool,
         mut options: ZipEntryOptions,
     ) -> Result<(), Error> {
-        let file_path = ZipFilePath::from_str(name);
-        if !file_path.is_dir() {
+        if !ZipFilePath::from_bytes(name_bytes).is_dir() {
             return Err(Error::from(ErrorKind::InvalidInput {
                 msg: "not a directory".to_string(),
             }));
         }
 
-        if file_path.len() > u16::MAX as usize {
+        if name_bytes.len() > u16::MAX as usize {
             return Err(Error::from(ErrorKind::InvalidInput {
                 msg: "directory name too long".to_string(),
             }));
         }
 
         let local_header_offset = self.writer.count();
-        let mut flags = 0u16;
-        if file_path.needs_utf8_encoding() {
-            flags |= FLAG_UTF8_ENCODING;
-        } else {
-            flags &= !FLAG_UTF8_ENCODING;
-        }
+        let flags = if needs_utf8 { FLAG_UTF8_ENCODING } else { 0 };
 
         // Store the name bytes in the central buffer
-        let name_bytes = file_path.as_ref().as_bytes();
         let name_len = name_bytes.len() as u16;
         self.file_names.extend_from_slice(name_bytes);
 
         let file_comment_len = comment_len(&options.file_comment)?;
 
-        self.write_local_header(&file_path, flags, CompressionMethod::Store, &mut options)?;
+        self.write_local_header(name_bytes, flags, CompressionMethod::Store, &mut options)?;
 
         self.file_comments.extend_from_slice(&options.file_comment);
 
@@ -729,6 +762,8 @@ where
 
     /// Creates a builder for adding a new file to the archive.
     ///
+    /// A trailing `/` is stripped unless the name is [`EntryName::verbatim`].
+    ///
     /// # Example
     ///
     /// ```rust
@@ -746,10 +781,13 @@ where
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     #[must_use]
-    pub fn new_file<'name>(&mut self, name: &'name str) -> ZipFileBuilder<'_, 'name, W> {
+    pub fn new_file<'name>(
+        &mut self,
+        name: impl Into<EntryName<'name>>,
+    ) -> ZipFileBuilder<'_, 'name, W> {
         ZipFileBuilder {
             archive: self,
-            name,
+            name: name.into(),
             compression_method: CompressionMethod::Store,
             modification_time: None,
             unix_permissions: None,
@@ -763,12 +801,22 @@ where
     /// Adds a new file to the archive with options (internal method).
     fn new_file_with_options(
         &mut self,
-        name: &str,
+        name: EntryName<'_>,
+        options: ZipEntryOptions,
+    ) -> Result<ZipEntryWriter<'_, W>, Error> {
+        with_resolved_entry_name(name, true, |name, needs_utf8| {
+            self.write_file_entry(name, needs_utf8, options)
+        })
+    }
+
+    /// Writes a file using resolved name bytes.
+    fn write_file_entry(
+        &mut self,
+        name_bytes: &[u8],
+        needs_utf8: bool,
         mut options: ZipEntryOptions,
     ) -> Result<ZipEntryWriter<'_, W>, Error> {
-        let file_path = ZipFilePath::from_str(name.trim_end_matches('/'));
-
-        if file_path.len() > u16::MAX as usize {
+        if name_bytes.len() > u16::MAX as usize {
             return Err(Error::from(ErrorKind::InvalidInput {
                 msg: "file name too long".to_string(),
             }));
@@ -776,23 +824,20 @@ where
 
         let local_header_offset = self.writer.count();
         let mut flags = FLAG_DATA_DESCRIPTOR;
-        if file_path.needs_utf8_encoding() {
+        if needs_utf8 {
             flags |= FLAG_UTF8_ENCODING;
-        } else {
-            flags &= !FLAG_UTF8_ENCODING;
         }
         if options.encrypted {
             flags |= FLAG_ENCRYPTED;
         }
 
         // Store the name bytes in the central buffer
-        let name_bytes = file_path.as_ref().as_bytes();
         let name_len = name_bytes.len() as u16;
         self.file_names.extend_from_slice(name_bytes);
 
         let file_comment_len = comment_len(&options.file_comment)?;
 
-        self.write_local_header(&file_path, flags, options.compression_method, &mut options)?;
+        self.write_local_header(name_bytes, flags, options.compression_method, &mut options)?;
 
         self.file_comments.extend_from_slice(&options.file_comment);
 

@@ -20,5 +20,6 @@ pub use errors::{Error, ErrorKind};
 pub use headers::{EntryFlags, Header};
 pub use locator::*;
 pub use mode::EntryMode;
+pub use path::EntryName;
 pub use reader_at::{FileReader, RangeReader, ReaderAt};
 pub use writer::*;
