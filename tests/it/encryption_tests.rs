@@ -4,7 +4,9 @@ use hmac::{Hmac, KeyInit, Mac};
 use pbkdf2::pbkdf2;
 use rawzip::{
     CompressionMethod, Crc32Option, Header, RECOMMENDED_BUFFER_SIZE, ZipArchive, ZipArchiveWriter,
-    ZipLocator, extra_fields::ExtraFieldId,
+    ZipLocalFileHeader, ZipLocator,
+    extra_fields::ExtraFieldId,
+    zipcrypto::{Decryptor, Encryptor},
 };
 use sha1::Sha1;
 use std::io::{self, Read, Write};
@@ -270,6 +272,8 @@ fn decrypt_winzip_aes_entry(path: &str, expected_strength: u8, expected_vendor_v
     }
 }
 
+const AES_WRITE_BUFFER_LEN: usize = 8 * 1024;
+
 /// A writer that encrypts compressed data with AES-CTR and accumulates the
 /// WinZip authentication code over the produced ciphertext (encrypt-then-MAC).
 ///
@@ -279,16 +283,18 @@ struct AesWriter<W> {
     writer: W,
     cipher: AesCipher,
     mac: HmacSha1,
-    scratch: Vec<u8>,
+    scratch: Box<[u8; AES_WRITE_BUFFER_LEN]>,
 }
 
 impl<W: Write> Write for AesWriter<W> {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        self.scratch.clear();
-        self.scratch.extend_from_slice(buf);
-        self.cipher.apply_keystream(&mut self.scratch);
-        self.mac.update(&self.scratch);
-        self.writer.write_all(&self.scratch)?;
+        for chunk in buf.chunks(AES_WRITE_BUFFER_LEN) {
+            let encrypted = &mut self.scratch[..chunk.len()];
+            encrypted.copy_from_slice(chunk);
+            self.cipher.apply_keystream(encrypted);
+            self.mac.update(encrypted);
+            self.writer.write_all(encrypted)?;
+        }
         Ok(buf.len())
     }
 
@@ -368,7 +374,7 @@ fn create_winzip_aes_entry(strength: u8, vendor_version: u16, plaintext: &[u8]) 
         writer: &mut entry,
         cipher,
         mac,
-        scratch: Vec::new(),
+        scratch: Box::new([0u8; AES_WRITE_BUFFER_LEN]),
     };
     let deflater = flate2::write::DeflateEncoder::new(aes_writer, flate2::Compression::default());
 
@@ -457,4 +463,305 @@ fn roundtrip_winzip_aes256_ae2() {
 #[test]
 fn roundtrip_winzip_aes256_ae1() {
     roundtrip_winzip_aes_entry(3, 1);
+}
+
+/// The traditional PKWARE ("ZipCrypto") encryption check byte for an entry.
+///
+/// rawzip deliberately leaves this 1-in-256 password pre-check to the caller,
+/// exposing the ingredients ([`Decryptor::check_byte`], the entry's CRC32, DOS
+/// mod time, and flags) rather than baking the policy in.
+///
+/// The encryption header (and its check byte) is part of the *local* entry,
+/// written by the encoder from the values in the local header it just wrote. So
+/// every ingredient is read from the local header — the flag that selects the
+/// source (general purpose bit 3), the DOS mod time, and the CRC32 — never the
+/// central directory, which is a separate copy that can legitimately differ. The
+/// check byte is the high byte of the packed DOS mod time for data-descriptor
+/// entries, or the high byte of the CRC32 otherwise.
+fn expected_zipcrypto_check_byte(local_header: &ZipLocalFileHeader) -> u8 {
+    if local_header.flags().has_data_descriptor() {
+        (local_header.last_modified_dos().packed_time() >> 8) as u8
+    } else {
+        (local_header.crc32() >> 24) as u8
+    }
+}
+
+/// Decodes a traditional PKWARE ("ZipCrypto") encrypted entry using the
+/// `rawzip` [`Decryptor`] layered under a deflate decoder. The entry in
+/// `assets/zipcrypto.zip` is a deflate-compressed `test.txt` carrying a data
+/// descriptor, so its encryption check byte is the high-order byte of the DOS
+/// modification time rather than of the CRC32.
+#[test]
+fn decrypt_zipcrypto_entry() {
+    let file = std::fs::File::open("assets/zipcrypto.zip").unwrap();
+    let mut buffer = vec![0u8; RECOMMENDED_BUFFER_SIZE];
+    let archive = ZipArchive::from_file(file, &mut buffer).unwrap();
+
+    let mut entries = archive.entries(&mut buffer);
+    let entry = entries.next_entry().unwrap().unwrap();
+
+    assert_eq!(entry.file_path().as_ref(), b"test.txt");
+    // ZipCrypto leaves the compression method untouched; encryption is signaled
+    // by general purpose bit 0, not by a dedicated method like WinZip AES.
+    assert_eq!(entry.compression_method(), CompressionMethod::Deflate);
+    assert!(entry.flags().has_data_descriptor());
+    assert!(entry.flags().is_encrypted());
+
+    let uncompressed_size = entry.uncompressed_size_hint();
+    let zip_entry = archive.get_entry(entry.wayfinder()).unwrap();
+
+    // The check byte's flag and time come from the *local* header, since that is
+    // what the encoder used when it wrote the encryption header.
+    let mut local_buffer = vec![0u8; RECOMMENDED_BUFFER_SIZE];
+    let local_header = zip_entry.local_header(&mut local_buffer).unwrap();
+
+    // Eagerly verify the password against the check byte (here the high byte of
+    // the DOS mod time, since the entry carries a data descriptor), as every
+    // zip tool does before bothering to decompress.
+    let decryptor = Decryptor::new(zip_entry.reader(), PASSWORD).unwrap();
+    assert_eq!(
+        decryptor.check_byte(),
+        expected_zipcrypto_check_byte(&local_header)
+    );
+    assert_eq!(decryptor.check_byte(), 0x38);
+
+    let inflater = flate2::read::DeflateDecoder::new(decryptor);
+
+    // The verifying reader validates the decrypted, decompressed bytes against
+    // the entry's CRC32 (read from the data descriptor), which is the real proof
+    // the password was correct.
+    let mut output = Vec::new();
+    zip_entry
+        .verifying_reader(inflater)
+        .read_to_end(&mut output)
+        .unwrap();
+
+    assert_eq!(output.len() as u64, uncompressed_size);
+    assert_eq!(output, b"aaaaaaaaaaaaaaaa\n");
+}
+
+/// A wrong password must not pass CRC validation. ZipCrypto's single check byte
+/// only catches ~255/256 of bad passwords, so the authoritative check is that
+/// decoding fails (either inflation or the CRC verification).
+#[test]
+fn decrypt_zipcrypto_wrong_password_fails() {
+    let file = std::fs::File::open("assets/zipcrypto.zip").unwrap();
+    let mut buffer = vec![0u8; RECOMMENDED_BUFFER_SIZE];
+    let archive = ZipArchive::from_file(file, &mut buffer).unwrap();
+
+    let mut entries = archive.entries(&mut buffer);
+    let entry = entries.next_entry().unwrap().unwrap();
+    let zip_entry = archive.get_entry(entry.wayfinder()).unwrap();
+
+    let mut local_buffer = vec![0u8; RECOMMENDED_BUFFER_SIZE];
+    let local_header = zip_entry.local_header(&mut local_buffer).unwrap();
+
+    // The check byte rejects the wrong password up front, before any decompression.
+    let decryptor = Decryptor::new(zip_entry.reader(), b"wrongpassword").unwrap();
+    assert_ne!(
+        decryptor.check_byte(),
+        expected_zipcrypto_check_byte(&local_header)
+    );
+
+    // And the decode fails regardless of the check byte: the garbage plaintext
+    // is rejected by the deflate decoder, or (had it inflated to the wrong
+    // bytes) by the verifying reader's size/CRC check.
+    let inflater = flate2::read::DeflateDecoder::new(decryptor);
+
+    let mut output = Vec::new();
+    let result = zip_entry
+        .verifying_reader(inflater)
+        .read_to_end(&mut output);
+    assert!(result.is_err(), "wrong password should not decode cleanly");
+}
+
+/// Writes a single-entry, traditional PKWARE ("ZipCrypto") encrypted archive
+/// using rawzip's [`Encryptor`], and returns the raw bytes.
+///
+/// A deterministic encryption-header prefix is used so the output is
+/// reproducible; real archives must draw those 11 bytes from a cryptographic RNG.
+fn create_zipcrypto_entry(method: CompressionMethod, plaintext: &[u8]) -> Vec<u8> {
+    let mut output = std::io::Cursor::new(Vec::new());
+    let mut archive = ZipArchiveWriter::new(&mut output);
+
+    let (mut entry, config) = archive
+        .new_file("test.txt")
+        // ZipCrypto leaves the compression method untouched; encryption is just
+        // general purpose bit 0.
+        .compression_method(method)
+        .encrypted(true)
+        .start()
+        .unwrap();
+
+    let header_random = [0x5au8; 11];
+    // rawzip always emits a data descriptor, so the check byte is the high byte
+    // of the DOS mod time.
+    let check_byte = (entry.last_modified_dos().packed_time() >> 8) as u8;
+    let encryptor = Encryptor::new(&mut entry, PASSWORD, header_random, check_byte).unwrap();
+
+    // Data flow: plaintext -> CRC/length tracking -> (optional) deflate ->
+    // ZipCrypto -> archive. The encryption header is part of the compressed size,
+    // which the entry tracks automatically as the encryptor writes through it.
+    let descriptor = match method {
+        CompressionMethod::Deflate => {
+            let deflater =
+                flate2::write::DeflateEncoder::new(encryptor, flate2::Compression::default());
+            let mut writer = config.wrap(deflater);
+            writer.write_all(plaintext).unwrap();
+            let (deflater, descriptor) = writer.finish().unwrap();
+            deflater.finish().unwrap(); // drops the encryptor, releasing &mut entry
+            descriptor
+        }
+        CompressionMethod::Store => {
+            let mut writer = config.wrap(encryptor);
+            writer.write_all(plaintext).unwrap();
+            let (_encryptor, descriptor) = writer.finish().unwrap();
+            descriptor // _encryptor dropped here, releasing &mut entry
+        }
+        other => panic!("unsupported method: {other:?}"),
+    };
+
+    entry.finish(descriptor).unwrap();
+    archive.finish().unwrap();
+    output.into_inner()
+}
+
+/// Round-trips a rawzip-written ZipCrypto entry back through rawzip's own
+/// [`Decryptor`], mirroring how [`decrypt_zipcrypto_entry`] reads the external
+/// fixture.
+fn roundtrip_zipcrypto(method: CompressionMethod, plaintext: &[u8]) {
+    let zip = create_zipcrypto_entry(method, plaintext);
+
+    let mut buffer = vec![0u8; RECOMMENDED_BUFFER_SIZE];
+    let archive = ZipLocator::new()
+        .locate_in_reader(zip.as_slice(), &mut buffer, zip.len() as u64)
+        .map_err(|(_, e)| e)
+        .unwrap();
+
+    let mut entries = archive.entries(&mut buffer);
+    let entry = entries.next_entry().unwrap().unwrap();
+    assert_eq!(entry.file_path().as_ref(), b"test.txt");
+    assert_eq!(entry.compression_method(), method);
+    assert!(entry.flags().is_encrypted());
+    assert!(entry.flags().has_data_descriptor());
+
+    let uncompressed_size = entry.uncompressed_size_hint();
+    let zip_entry = archive.get_entry(entry.wayfinder()).unwrap();
+
+    let mut local_buffer = vec![0u8; RECOMMENDED_BUFFER_SIZE];
+    let local_header = zip_entry.local_header(&mut local_buffer).unwrap();
+
+    let decryptor = Decryptor::new(zip_entry.reader(), PASSWORD).unwrap();
+    assert_eq!(
+        decryptor.check_byte(),
+        expected_zipcrypto_check_byte(&local_header)
+    );
+
+    let mut output = Vec::new();
+    match method {
+        CompressionMethod::Deflate => {
+            let inflater = flate2::read::DeflateDecoder::new(decryptor);
+            zip_entry
+                .verifying_reader(inflater)
+                .read_to_end(&mut output)
+                .unwrap();
+        }
+        CompressionMethod::Store => {
+            zip_entry
+                .verifying_reader(decryptor)
+                .read_to_end(&mut output)
+                .unwrap();
+        }
+        other => panic!("unsupported method: {other:?}"),
+    }
+
+    assert_eq!(output.len() as u64, uncompressed_size);
+    assert_eq!(output, plaintext);
+}
+
+#[test]
+fn roundtrip_zipcrypto_deflate() {
+    let plaintext = b"the quick brown fox jumps over the lazy dog".repeat(8);
+    roundtrip_zipcrypto(CompressionMethod::Deflate, &plaintext);
+}
+
+#[test]
+fn roundtrip_zipcrypto_store() {
+    roundtrip_zipcrypto(CompressionMethod::Store, b"aaaaaaaaaaaaaaaa\n");
+}
+
+#[test]
+fn roundtrip_zipcrypto_empty() {
+    roundtrip_zipcrypto(CompressionMethod::Deflate, b"");
+}
+
+/// Decoding rawzip's own ZipCrypto output with the wrong password must fail.
+#[test]
+fn roundtrip_zipcrypto_wrong_password_fails() {
+    let plaintext = b"the quick brown fox".repeat(8);
+    let zip = create_zipcrypto_entry(CompressionMethod::Deflate, &plaintext);
+
+    let mut buffer = vec![0u8; RECOMMENDED_BUFFER_SIZE];
+    let archive = ZipLocator::new()
+        .locate_in_reader(zip.as_slice(), &mut buffer, zip.len() as u64)
+        .map_err(|(_, e)| e)
+        .unwrap();
+    let mut entries = archive.entries(&mut buffer);
+    let entry = entries.next_entry().unwrap().unwrap();
+    let zip_entry = archive.get_entry(entry.wayfinder()).unwrap();
+
+    let inflater = flate2::read::DeflateDecoder::new(
+        Decryptor::new(zip_entry.reader(), b"wrongpassword").unwrap(),
+    );
+    let mut output = Vec::new();
+    let result = zip_entry
+        .verifying_reader(inflater)
+        .read_to_end(&mut output);
+    assert!(result.is_err(), "wrong password should not decode cleanly");
+}
+
+/// ```sh
+/// printf 'rawzip zipcrypto no-data-descriptor fixture\n' > test.txt
+/// 7z a -tzip -prawzipiscool -mem=ZipCrypto zipcrypto-no-data-descriptor.zip test.txt
+/// ```
+#[test]
+fn decrypt_zipcrypto_no_data_descriptor_entry() {
+    let file = std::fs::File::open("assets/zipcrypto-no-data-descriptor.zip").unwrap();
+    let mut buffer = vec![0u8; RECOMMENDED_BUFFER_SIZE];
+    let archive = ZipArchive::from_file(file, &mut buffer).unwrap();
+
+    let mut entries = archive.entries(&mut buffer);
+    let entry = entries.next_entry().unwrap().unwrap();
+
+    assert_eq!(entry.file_path().as_ref(), b"test.txt");
+    assert_eq!(entry.compression_method(), CompressionMethod::Store);
+    assert!(entry.flags().is_encrypted());
+    // The distinguishing trait: no data descriptor, so the check byte is the
+    // high byte of the CRC32, not of the DOS mod time.
+    assert!(!entry.flags().has_data_descriptor());
+
+    let uncompressed_size = entry.uncompressed_size_hint();
+    let zip_entry = archive.get_entry(entry.wayfinder()).unwrap();
+
+    // The check byte's source flag and CRC come from the *local* header, since
+    // that is what the encoder used when it wrote the encryption header.
+    let mut local_buffer = vec![0u8; RECOMMENDED_BUFFER_SIZE];
+    let local_header = zip_entry.local_header(&mut local_buffer).unwrap();
+
+    let decryptor = Decryptor::new(zip_entry.reader(), PASSWORD).unwrap();
+    assert_eq!(
+        decryptor.check_byte(),
+        expected_zipcrypto_check_byte(&local_header)
+    );
+
+    // The entry is stored, so the decryptor's output is the plaintext directly;
+    // the verifying reader confirms it against the entry's CRC32.
+    let mut output = Vec::new();
+    zip_entry
+        .verifying_reader(decryptor)
+        .read_to_end(&mut output)
+        .unwrap();
+
+    assert_eq!(output.len() as u64, uncompressed_size);
+    assert_eq!(output, b"rawzip zipcrypto no-data-descriptor fixture\n");
 }

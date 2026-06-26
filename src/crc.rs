@@ -36,6 +36,12 @@ const fn gen_crc_table() -> [[u32; 256]; 16] {
 // ref: https://github.com/srijs/rust-crc32fast/commit/e61ce6a39bbe9da495198a4037292ec299e8970f
 static CRC_TABLE: [[u32; 256]; 16] = gen_crc_table();
 
+/// Folds a single byte into a running CRC32 remainder
+#[inline]
+pub(crate) fn crc32_byte(crc: u32, byte: u8) -> u32 {
+    (crc >> 8) ^ CRC_TABLE[0][((crc ^ u32::from(byte)) & 0xFF) as usize]
+}
+
 /// Compute the CRC32 (IEEE) of a byte slice
 ///
 /// Typically this function is used only to compute the CRC32 of data that is
@@ -86,9 +92,10 @@ pub fn crc32_chunk(data: &[u8], prev: u32) -> u32 {
         crc32_slice16(&data[16..], crc)
     });
 
-    crc = chunks32.remainder().iter().fold(crc, |crc, &x| {
-        (crc >> 8) ^ CRC_TABLE[0][(u32::from(x) ^ (crc & 0xFF)) as usize]
-    });
+    crc = chunks32
+        .remainder()
+        .iter()
+        .fold(crc, |crc, &x| crc32_byte(crc, x));
 
     !crc
 }
