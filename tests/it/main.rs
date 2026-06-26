@@ -8,7 +8,7 @@ use std::path::Path;
 
 mod crc_tests;
 mod encryption_tests;
-mod entry_name_tests;
+mod entry_path_tests;
 mod extra_data_zip_tests;
 mod extra_fields_test;
 mod false_sentinel_tests;

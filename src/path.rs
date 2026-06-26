@@ -383,29 +383,32 @@ impl ZipFilePath<NormalizedPathBuf> {
     }
 }
 
-/// Controls how an entry name is written.
+/// Controls how an entry path is written to the ZIP file name field.
 ///
-/// - [`EntryName::conformant`] normalizes UTF-8 text and sets the
+/// ZIP calls this header field the "file name", but the value may include a
+/// relative path such as `dir/file.txt`.
+///
+/// - [`EntryPath::conformant`] normalizes UTF-8 text and sets the
 ///   [`EntryFlags::is_utf8`](crate::EntryFlags::is_utf8) flag when needed.
-/// - [`EntryName::verbatim`] writes uninterpreted bytes without that flag.
+/// - [`EntryPath::verbatim`] writes uninterpreted bytes without that flag.
 ///
 /// # Examples
 ///
 /// ```rust
-/// use rawzip::EntryName;
+/// use rawzip::EntryPath;
 ///
 /// // A UTF-8 path, normalized on write.
-/// let name = EntryName::conformant("docs/readme.txt");
+/// let path = EntryPath::conformant("docs/readme.txt");
 ///
 /// // Exact bytes, no normalization, no UTF-8 flag.
-/// let name = EntryName::verbatim(b"odd\x05name");
+/// let path = EntryPath::verbatim(b"odd\x05name");
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct EntryName<'a>(pub(crate) EntryNameInner<'a>);
+pub struct EntryPath<'a>(pub(crate) EntryPathInner<'a>);
 
-/// The private name-writing policy.
+/// The private path-writing policy.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum EntryNameInner<'a> {
+pub(crate) enum EntryPathInner<'a> {
     /// Normalize UTF-8 text and set utf-8 flag when needed.
     Conformant(Cow<'a, str>),
     /// UTF-8 text already normalized by the reader.
@@ -414,55 +417,55 @@ pub(crate) enum EntryNameInner<'a> {
     Verbatim(Cow<'a, [u8]>),
 }
 
-impl<'a> EntryName<'a> {
-    /// Creates a normalized UTF-8 name, setting utf-8 flag when needed.
+impl<'a> EntryPath<'a> {
+    /// Creates a normalized UTF-8 path, setting utf-8 flag when needed.
     #[inline]
-    pub fn conformant<S: Into<Cow<'a, str>>>(name: S) -> Self {
-        EntryName(EntryNameInner::Conformant(name.into()))
+    pub fn conformant<S: Into<Cow<'a, str>>>(path: S) -> Self {
+        EntryPath(EntryPathInner::Conformant(path.into()))
     }
 
-    /// Creates an exact, uninterpreted name without utf-8 flag.
+    /// Creates an exact, uninterpreted path without utf-8 flag.
     #[inline]
-    pub fn verbatim<B: Into<Cow<'a, [u8]>>>(name: B) -> Self {
-        EntryName(EntryNameInner::Verbatim(name.into()))
+    pub fn verbatim<B: Into<Cow<'a, [u8]>>>(path: B) -> Self {
+        EntryPath(EntryPathInner::Verbatim(path.into()))
     }
 }
 
-impl<'a, T> From<&'a T> for EntryName<'a>
+impl<'a, T> From<&'a T> for EntryPath<'a>
 where
     T: AsRef<str> + ?Sized,
 {
     #[inline]
     fn from(value: &'a T) -> Self {
-        EntryName::conformant(value.as_ref())
+        EntryPath::conformant(value.as_ref())
     }
 }
 
-impl<'a> From<String> for EntryName<'a> {
+impl<'a> From<String> for EntryPath<'a> {
     #[inline]
     fn from(value: String) -> Self {
-        EntryName::conformant(value)
+        EntryPath::conformant(value)
     }
 }
 
-impl<'a> From<Cow<'a, str>> for EntryName<'a> {
+impl<'a> From<Cow<'a, str>> for EntryPath<'a> {
     #[inline]
     fn from(value: Cow<'a, str>) -> Self {
-        EntryName::conformant(value)
+        EntryPath::conformant(value)
     }
 }
 
-impl<'a> From<ZipFilePath<NormalizedPath<'a>>> for EntryName<'a> {
+impl<'a> From<ZipFilePath<NormalizedPath<'a>>> for EntryPath<'a> {
     #[inline]
     fn from(value: ZipFilePath<NormalizedPath<'a>>) -> Self {
-        EntryName(EntryNameInner::Normalized(value.data.0))
+        EntryPath(EntryPathInner::Normalized(value.data.0))
     }
 }
 
-impl<'a> From<ZipFilePath<NormalizedPathBuf>> for EntryName<'a> {
+impl<'a> From<ZipFilePath<NormalizedPathBuf>> for EntryPath<'a> {
     #[inline]
     fn from(value: ZipFilePath<NormalizedPathBuf>) -> Self {
-        EntryName(EntryNameInner::Normalized(Cow::Owned(value.data.0)))
+        EntryPath(EntryPathInner::Normalized(Cow::Owned(value.data.0)))
     }
 }
 
