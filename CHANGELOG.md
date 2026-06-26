@@ -66,6 +66,7 @@ The reason is to prevent breaking changes in the future by properly modeling unk
 - Raise minimum supported Rust version (MSRV) to 1.85 and move to the 2024 edition
 - Fix classic zip with 65536 entries failure to parse edge case
 - Fix failure to parse zip64 files that have a central directory size >= 4 GiB
+- Fix trailing slashes present in writer file entries in normalization
 
 ## v0.4.4 - March 9th, 2026
 
