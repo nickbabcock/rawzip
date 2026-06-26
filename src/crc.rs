@@ -1,3 +1,6 @@
+/// Compute crc32 for given chunk with initial value.
+pub type Crc32Chunk = fn(&[u8], u32) -> u32;
+
 const fn gen_crc_table() -> [[u32; 256]; 16] {
     let mut table: [[u32; 256]; 16] = [[0; 256]; 16];
     let poly = 0xEDB88320; // Polynomial used in CRC-32

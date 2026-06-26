@@ -1,4 +1,4 @@
-use crate::crc::crc32_chunk;
+use crate::crc::{Crc32Chunk, crc32_chunk};
 use crate::errors::{Error, ErrorKind};
 use crate::extra_fields::{ExtraFieldId, ExtraFields};
 use crate::headers::EntryFlags;
@@ -232,12 +232,30 @@ impl<'a> ZipSliceEntry<'a> {
 
     /// Returns a reader that wraps a decompressor and verify the size and CRC
     /// of the decompressed data once finished.
+    ///
+    /// Built-in `crc32_chunk` function will be used to calculate crc32.
     pub fn verifying_reader<D>(&self, reader: D) -> ZipSliceVerifier<D>
+    where
+        D: std::io::Read,
+    {
+        self.verifying_reader_crc32(reader, crc32_chunk)
+    }
+
+    /// Returns a reader that wraps a decompressor and verify the size and CRC
+    /// of the decompressed data once finished.
+    ///
+    /// Provided crc32_chunk function will be used to calculate crc32.
+    pub fn verifying_reader_crc32<D>(
+        &self,
+        reader: D,
+        crc32_chunk: Crc32Chunk,
+    ) -> ZipSliceVerifier<D>
     where
         D: std::io::Read,
     {
         ZipSliceVerifier(ZipVerifier {
             reader,
+            crc32_chunk,
             verifier: self.verifier,
             crc: 0,
             size: 0,
@@ -685,12 +703,26 @@ where
 
     /// Returns a reader that wraps a decompressor and verify the size and CRC
     /// of the decompressed data once finished.
+    ///
+    /// Built-in `crc32_chunk` function will be used to calculate crc32.
     pub fn verifying_reader<D>(&self, reader: D) -> ZipVerifier<D>
+    where
+        D: std::io::Read,
+    {
+        self.verifying_reader_crc32(reader, crc32_chunk)
+    }
+
+    /// Returns a reader that wraps a decompressor and verify the size and CRC
+    /// of the decompressed data once finished.
+    ///
+    /// Provided `crc32_chunk` function will be used to calculate crc32.
+    pub fn verifying_reader_crc32<D>(&self, reader: D, crc32_chunk: Crc32Chunk) -> ZipVerifier<D>
     where
         D: std::io::Read,
     {
         ZipVerifier {
             reader,
+            crc32_chunk,
             crc: 0,
             size: 0,
             verifier: ZipVerification {
@@ -874,6 +906,7 @@ impl ZipVerification {
 #[derive(Debug, Clone)]
 pub struct ZipVerifier<Decompressor> {
     reader: Decompressor,
+    crc32_chunk: Crc32Chunk,
     crc: u32,
     size: u64,
     verifier: ZipVerification,
@@ -897,7 +930,7 @@ where
         }
 
         let read = self.reader.read(buf)?;
-        self.crc = crc32_chunk(&buf[..read], self.crc);
+        self.crc = (self.crc32_chunk)(&buf[..read], self.crc);
         self.size += read as u64;
 
         if read == 0 || self.size >= self.verifier.uncompressed_size {
