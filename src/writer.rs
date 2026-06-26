@@ -1004,7 +1004,7 @@ pub struct ZipEntryWriter<'a, W> {
     extra_fields: ExtraFieldsContainer,
 }
 
-/// Configuration for creating data writers that handle uncompressed data and CRC32 calculation.
+/// Configuration for creating data writers.
 #[derive(Debug)]
 pub struct ZipDataWriterConfig {
     crc32_option: Crc32Option,
