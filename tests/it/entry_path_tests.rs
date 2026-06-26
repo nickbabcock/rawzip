@@ -1,11 +1,11 @@
-use rawzip::{EntryName, ZipArchive, ZipArchiveWriter};
+use rawzip::{EntryPath, ZipArchive, ZipArchiveWriter};
 use std::io::Write;
 
 /// Writes one file and returns the archive.
-fn write_one<'n>(name: impl Into<EntryName<'n>>) -> Vec<u8> {
+fn write_one<'p>(path: impl Into<EntryPath<'p>>) -> Vec<u8> {
     let mut output = Vec::new();
     let mut archive = ZipArchiveWriter::new(&mut output);
-    let (mut entry, config) = archive.new_file(name).start().unwrap();
+    let (mut entry, config) = archive.new_file(path).start().unwrap();
     let mut writer = config.wrap(&mut entry);
     writer.write_all(b"content").unwrap();
     let (_, descriptor) = writer.finish().unwrap();
@@ -15,18 +15,18 @@ fn write_one<'n>(name: impl Into<EntryName<'n>>) -> Vec<u8> {
 }
 
 #[test]
-fn borrowed_str_reference_is_an_entry_name() {
-    let name = "file.txt";
-    let name_ref: &&str = &name;
-    let output = write_one(name_ref);
+fn borrowed_str_reference_is_an_entry_path() {
+    let path = "file.txt";
+    let path_ref: &&str = &path;
+    let output = write_one(path_ref);
     let archive = ZipArchive::from_slice(&output).unwrap();
     let entry = archive.entries().next().unwrap().unwrap();
 
     assert_eq!(entry.file_path().as_ref(), b"file.txt");
 }
 
-/// Reads the first entry's raw name.
-fn first_entry_name(zip_data: &[u8]) -> Vec<u8> {
+/// Reads the first entry's raw path.
+fn first_entry_path(zip_data: &[u8]) -> Vec<u8> {
     let archive = ZipArchive::from_slice(zip_data).unwrap();
     let mut entries = archive.entries();
     let entry = entries.next_entry().unwrap().unwrap();
@@ -47,10 +47,10 @@ fn verbatim_shift_jis_roundtrip() {
     raw.extend_from_slice(b".txt");
     assert!(std::str::from_utf8(&raw).is_err());
 
-    let output = write_one(EntryName::verbatim(raw.as_slice()));
+    let output = write_one(EntryPath::verbatim(raw.as_slice()));
 
     assert_eq!(
-        first_entry_name(&output),
+        first_entry_path(&output),
         raw,
         "bytes must be preserved exactly"
     );
@@ -61,32 +61,32 @@ fn verbatim_shift_jis_roundtrip() {
 #[test]
 fn verbatim_valid_utf8_no_flag() {
     let raw = "日本.txt".as_bytes();
-    let output = write_one(EntryName::verbatim(raw));
+    let output = write_one(EntryPath::verbatim(raw));
 
-    assert_eq!(first_entry_name(&output), raw);
+    assert_eq!(first_entry_path(&output), raw);
     assert!(!first_entry_is_utf8(&output));
 }
 
-/// Conformant non-ASCII names set the UTF-8 flag.
+/// Conformant non-ASCII paths set the UTF-8 flag.
 #[test]
 fn conformant_non_ascii_sets_flag() {
-    let output = write_one(EntryName::conformant("日本.txt"));
-    assert_eq!(first_entry_name(&output), "日本.txt".as_bytes());
+    let output = write_one(EntryPath::conformant("日本.txt"));
+    assert_eq!(first_entry_path(&output), "日本.txt".as_bytes());
     assert!(first_entry_is_utf8(&output));
 }
 
-/// String names retain traversal normalization.
+/// String paths retain traversal normalization.
 #[test]
 fn conformant_traversal_collapses_to_root() {
     let output = write_one("../../etc/passwd");
-    assert_eq!(first_entry_name(&output), b"etc/passwd");
+    assert_eq!(first_entry_path(&output), b"etc/passwd");
 }
 
-/// Reader-normalized names can be written directly.
+/// Reader-normalized paths can be written directly.
 #[test]
 fn normalized_skip_arm_roundtrip() {
     // Build an entry requiring normalization.
-    let source = write_one(EntryName::verbatim(b"dir/../safe.txt".as_slice()));
+    let source = write_one(EntryPath::verbatim(b"dir/../safe.txt".as_slice()));
     let src_archive = ZipArchive::from_slice(&source).unwrap();
     let mut entries = src_archive.entries();
     let entry = entries.next_entry().unwrap().unwrap();
@@ -95,12 +95,12 @@ fn normalized_skip_arm_roundtrip() {
 
     // Write the normalized path directly.
     let output = write_one(safe);
-    assert_eq!(first_entry_name(&output), b"safe.txt");
+    assert_eq!(first_entry_path(&output), b"safe.txt");
 }
 
-/// Files and directories accept owned names.
+/// Files and directories accept owned paths.
 #[test]
-fn owned_names_accepted() {
+fn owned_paths_accepted() {
     let mut output = Vec::new();
     let mut archive = ZipArchiveWriter::new(&mut output);
     archive.new_dir(String::from("d/")).create().unwrap();
