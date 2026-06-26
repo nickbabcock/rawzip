@@ -13,6 +13,7 @@ mod reader_at;
 pub mod time;
 mod utils;
 mod writer;
+pub mod zipcrypto;
 
 pub use archive::*;
 pub use crc::crc32;
