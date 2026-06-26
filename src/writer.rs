@@ -32,13 +32,14 @@ fn with_resolved_entry_name<T>(
 ) -> T {
     match name.0 {
         EntryNameInner::Conformant(name) => {
+            // Normalize first, then strip a trailing slash.
+            let path = ZipFilePath::from_str(&name);
             let name = if trim_trailing_slash {
-                name.trim_end_matches('/')
+                path.trim_trailing_slash()
             } else {
-                &name
+                path
             };
-            let path = ZipFilePath::from_str(name);
-            let name = path.as_str();
+            let name = name.as_str();
             write(name.as_bytes(), str_needs_utf8(name))
         }
         EntryNameInner::Normalized(name) => {
@@ -1387,6 +1388,28 @@ mod tests {
         let mut archive = ZipArchiveWriter::new(&mut output);
         archive.new_dir("a//b/").create().unwrap();
         archive.finish().unwrap();
+    }
+
+    #[test]
+    fn test_new_file_never_produces_directory_name() {
+        for (input, expected) in [("dir\\", "dir"), ("a/b/../", "a"), ("x/", "x")] {
+            let mut output = Cursor::new(Vec::new());
+            let mut archive = ZipArchiveWriter::new(&mut output);
+            let (mut entry, config) = archive.new_file(input).start().unwrap();
+            let mut writer = config.wrap(&mut entry);
+            writer.write_all(b"hello").unwrap();
+            let (_, desc) = writer.finish().unwrap();
+            entry.finish(desc).unwrap();
+            archive.finish().unwrap();
+
+            let buf = output.into_inner();
+            let reader = ZipArchive::from_slice(&buf).unwrap();
+            let mut entries = reader.entries();
+            let header = entries.next_entry().unwrap().unwrap();
+            let path = header.file_path();
+            assert_eq!(path.as_ref(), expected.as_bytes(), "input {input:?}");
+            assert!(!path.is_dir(), "input {input:?} produced a directory entry");
+        }
     }
 
     #[test]
