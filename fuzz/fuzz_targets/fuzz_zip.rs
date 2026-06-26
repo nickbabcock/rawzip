@@ -30,7 +30,7 @@ fn fuzz_zip(data: &[u8]) {
     });
 }
 
-fn fuzz_reader_zip_archive(data: &[u8], buf: &mut Vec<u8>) -> Result<(), rawzip::Error> {
+fn fuzz_reader_zip_archive(data: &[u8], buf: &mut [u8]) -> Result<(), rawzip::Error> {
     let (archive_buf, extra_data_buf) = buf.split_at_mut(rawzip::RECOMMENDED_BUFFER_SIZE);
     let locator = rawzip::ZipLocator::new();
     let Ok(archive) = locator.locate_in_reader(data, archive_buf, data.len() as u64) else {

@@ -99,6 +99,23 @@ jobs:
     - name: Build comparison benchmark
       run: cargo bench --manifest-path compare/Cargo.toml --no-run
 
+  clippy:
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v7
+    - name: Install Rust
+      uses: dtolnay/rust-toolchain@master
+      with:
+        toolchain: stable
+        components: clippy
+        targets: wasm32-unknown-unknown
+    - run: cargo clippy --all-targets -- -D warnings
+    - run: cargo clippy --target wasm32-unknown-unknown -- -D warnings
+    - run: cargo clippy --manifest-path bench/Cargo.toml --all-targets -- -D warnings
+    - run: cargo clippy --manifest-path compare/Cargo.toml --all-targets -- -D warnings
+    - run: cargo clippy --manifest-path fuzz/Cargo.toml --all-targets -- -D warnings
+
   # Check that all files are formatted properly.
   rustfmt:
     runs-on: ubuntu-latest
