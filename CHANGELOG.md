@@ -56,6 +56,7 @@ The reason is to prevent breaking changes in the future by properly modeling unk
 - Add `ZipFileBuilder::encrypted` to set the encryption general purpose bit (caller is still responsible for actually doing the encryption).
 - Add `ZipSliceArchive::get_ref` and  `into_inner` to borrow or recover the underlying data
 - Add `Add ZipArchive::get_mut` to mutably access the reader
+- Expose local header crc, uncompressed size, and compressed size
 - Preserve trailing slash in directories when normalization required
 - Implement ReaderAt for unsized `[u8]` slice, unlocking `ReaderAt` for `Box<[u8]>`, `Arc<[u8]>`, and `Rc<[u8]>`
 - Implement ReaderAt for `Cow<[u8]>`
