@@ -45,8 +45,9 @@ pub(crate) fn crc32_byte(crc: u32, byte: u8) -> u32 {
 /// Compute the CRC32 (IEEE) of a byte slice
 ///
 /// Typically this function is used only to compute the CRC32 of data that is
-/// held entirely in memory. When decompressing, a
-/// [`ZipVerifier`](crate::ZipVerifier) is suitable to streaming computations.
+/// held entirely in memory. When the bytes arrive incrementally, fold them with
+/// [`Crc32`] instead, or let a [`ZipVerifier`](crate::ZipVerifier) handle the
+/// streaming computation while decompressing.
 ///
 /// While this crc implementation is the fastest known on Wasm, it falls a bit
 /// short on native platforms. In a benchmark, using hardware intrinsics like
@@ -60,7 +61,47 @@ pub(crate) fn crc32_byte(crc: u32, byte: u8) -> u32 {
 /// always bring your own CRC implementation with
 /// [`crate::ZipReader::claim_verifier`].
 pub fn crc32(data: &[u8]) -> u32 {
-    crc32_chunk(data, 0)
+    !crc32_fold(data, !0)
+}
+
+/// Streaming CRC32 accumulator.
+///
+/// ```rust
+/// # use rawzip::Crc32;
+/// let mut crc = Crc32::new();
+/// crc.update(b"Hello, ");
+/// crc.update(b"world!");
+/// assert_eq!(crc.checksum(), rawzip::crc32(b"Hello, world!"));
+/// ```
+#[derive(Debug, Clone)]
+pub struct Crc32 {
+    state: u32,
+}
+
+impl Crc32 {
+    /// Creates a new accumulator with no data
+    #[inline]
+    pub fn new() -> Self {
+        Crc32 { state: !0 }
+    }
+
+    /// Folds more bytes into the running checksum.
+    #[inline]
+    pub fn update(&mut self, data: &[u8]) {
+        self.state = crc32_fold(data, self.state);
+    }
+
+    /// Returns the CRC32 of the data folded in so far.
+    #[inline]
+    pub fn checksum(&self) -> u32 {
+        !self.state
+    }
+}
+
+impl Default for Crc32 {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 #[inline(always)]
@@ -85,9 +126,9 @@ fn crc32_slice16(data: &[u8], crc: u32) -> u32 {
 }
 
 #[inline]
-pub fn crc32_chunk(data: &[u8], prev: u32) -> u32 {
+fn crc32_fold(data: &[u8], state: u32) -> u32 {
     let mut chunks32 = data.chunks_exact(32);
-    let mut crc = chunks32.by_ref().fold(!prev, |crc, data| {
+    let mut crc = chunks32.by_ref().fold(state, |crc, data| {
         let crc = crc32_slice16(data, crc);
         crc32_slice16(&data[16..], crc)
     });
@@ -97,7 +138,7 @@ pub fn crc32_chunk(data: &[u8], prev: u32) -> u32 {
         .iter()
         .fold(crc, |crc, &x| crc32_byte(crc, x));
 
-    !crc
+    crc
 }
 
 #[cfg(test)]
@@ -141,11 +182,12 @@ mod tests {
     }
 
     #[test]
-    fn test_crc_chunk_streaming() {
+    fn test_crc32_accumulator_streaming() {
         let data: Vec<u8> = (0u8..=255).cycle().take(4096).collect();
         let full = crc32(&data);
-        let half = crc32_chunk(&data[..2048], 0);
-        let streamed = crc32_chunk(&data[2048..], half);
-        assert_eq!(full, streamed);
+        let mut streamed = Crc32::new();
+        streamed.update(&data[..2048]);
+        streamed.update(&data[2048..]);
+        assert_eq!(full, streamed.checksum());
     }
 }

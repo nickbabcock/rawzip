@@ -16,7 +16,7 @@ mod writer;
 pub mod zipcrypto;
 
 pub use archive::*;
-pub use crc::crc32;
+pub use crc::{Crc32, crc32};
 pub use errors::{Error, ErrorKind};
 pub use headers::{EntryFlags, Header};
 pub use locator::*;

@@ -1,4 +1,3 @@
-use crate::crc::crc32_chunk;
 use crate::errors::{Error, ErrorKind};
 use crate::extra_fields::{ExtraFieldId, ExtraFields};
 use crate::headers::EntryFlags;
@@ -10,7 +9,7 @@ use crate::path::{RawPath, ZipFilePath};
 use crate::reader_at::{FileReader, MutexReader, RangeReader, ReaderAt, ReaderAtExt};
 use crate::time::{DosDateTime, ZipDateTimeKind, extract_best_timestamp};
 use crate::utils::{le_u16, le_u32, le_u64};
-use crate::{EndOfCentralDirectory, EndOfCentralDirectoryRecordFixed, ZipLocator};
+use crate::{Crc32, EndOfCentralDirectory, EndOfCentralDirectoryRecordFixed, ZipLocator};
 use std::io::{Read, Seek, Write};
 
 pub(crate) const END_OF_CENTRAL_DIR_SIGNATURE64: u32 = 0x06064b50;
@@ -239,7 +238,7 @@ impl<'a> ZipSliceEntry<'a> {
         ZipSliceVerifier(ZipVerifier {
             reader,
             verifier: self.verifier,
-            crc: 0,
+            crc: Crc32::new(),
             size: 0,
         })
     }
@@ -691,7 +690,7 @@ where
     {
         ZipVerifier {
             reader,
-            crc: 0,
+            crc: Crc32::new(),
             size: 0,
             verifier: ZipVerification {
                 crc: self.entry.crc,
@@ -874,7 +873,7 @@ impl ZipVerification {
 #[derive(Debug, Clone)]
 pub struct ZipVerifier<Decompressor> {
     reader: Decompressor,
-    crc: u32,
+    crc: Crc32,
     size: u64,
     verifier: ZipVerification,
 }
@@ -897,13 +896,13 @@ where
         }
 
         let read = self.reader.read(buf)?;
-        self.crc = crc32_chunk(&buf[..read], self.crc);
+        self.crc.update(&buf[..read]);
         self.size += read as u64;
 
         if read == 0 || self.size >= self.verifier.uncompressed_size {
             self.verifier
                 .valid(ZipVerification {
-                    crc: self.crc,
+                    crc: self.crc.checksum(),
                     uncompressed_size: self.size,
                 })
                 .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;

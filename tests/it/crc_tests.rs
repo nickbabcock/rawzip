@@ -159,36 +159,63 @@ fn full_read_verifies_without_finish() {
     assert_invalid_checksum(err, corrupted, original);
 }
 
-struct CustomCrcVerifier<R> {
-    reader: flate2::CrcReader<DeflateDecoder<ZipReader<R>>>,
+trait Checksum {
+    fn update(&mut self, data: &[u8]);
+    fn checksum(&self) -> u32;
+}
+
+impl Checksum for rawzip::Crc32 {
+    fn update(&mut self, data: &[u8]) {
+        rawzip::Crc32::update(self, data);
+    }
+    fn checksum(&self) -> u32 {
+        rawzip::Crc32::checksum(self)
+    }
+}
+
+impl Checksum for flate2::Crc {
+    fn update(&mut self, data: &[u8]) {
+        flate2::Crc::update(self, data);
+    }
+    fn checksum(&self) -> u32 {
+        self.sum()
+    }
+}
+
+/// A streaming verifying reader generic over the crc backend.
+struct CustomCrcVerifier<R, C> {
+    reader: DeflateDecoder<ZipReader<R>>,
+    crc: C,
     size: u64,
     verifications: usize,
 }
 
-impl<R: ReaderAt> CustomCrcVerifier<R> {
-    fn new(reader: ZipReader<R>) -> Self {
+impl<R: ReaderAt, C: Checksum> CustomCrcVerifier<R, C> {
+    fn new(reader: ZipReader<R>, crc: C) -> Self {
         Self {
-            reader: flate2::CrcReader::new(DeflateDecoder::new(reader)),
+            reader: DeflateDecoder::new(reader),
+            crc,
             size: 0,
             verifications: 0,
         }
     }
 }
 
-impl<R: ReaderAt> Read for CustomCrcVerifier<R> {
+impl<R: ReaderAt, C: Checksum> Read for CustomCrcVerifier<R, C> {
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
         if buf.is_empty() {
             return Ok(0);
         }
 
         let read = self.reader.read(buf)?;
+        self.crc.update(&buf[..read]);
         self.size += read as u64;
 
-        let expected = self.reader.get_ref().get_ref().claim_verifier();
+        let expected = self.reader.get_ref().claim_verifier();
         if read == 0 || self.size >= expected.uncompressed_size {
             expected
                 .valid(ZipVerification {
-                    crc: self.reader.crc().sum(),
+                    crc: self.crc.checksum(),
                     uncompressed_size: self.size,
                 })
                 .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
@@ -199,13 +226,12 @@ impl<R: ReaderAt> Read for CustomCrcVerifier<R> {
     }
 }
 
-#[test]
-fn custom_crc_verifier_empty_buffer_and_eof_verification() {
+fn run_custom_crc_verifier_eof<C: Checksum>(crc: C) {
     let data = build_deflate_zip(CONTENT);
     let archive = ZipArchive::from_slice(&data).unwrap().into_reader();
     let wayfinder = first_wayfinder(&archive);
     let ent = archive.get_entry(wayfinder).unwrap();
-    let mut verifier = CustomCrcVerifier::new(ent.reader());
+    let mut verifier = CustomCrcVerifier::new(ent.reader(), crc);
 
     // An empty target buffer must not be treated as EOF.
     assert_eq!(verifier.read(&mut []).unwrap(), 0);
@@ -219,6 +245,12 @@ fn custom_crc_verifier_empty_buffer_and_eof_verification() {
     // Redundant reads past EOF stay at EOF and run the same verification path.
     assert_eq!(verifier.read(&mut [0u8; 16]).unwrap(), 0);
     assert_eq!(verifier.verifications, 3);
+}
+
+#[test]
+fn custom_crc_verifier_empty_buffer_and_eof_verification() {
+    run_custom_crc_verifier_eof(flate2::Crc::new());
+    run_custom_crc_verifier_eof(rawzip::Crc32::new());
 }
 
 #[test]
