@@ -46,7 +46,7 @@ The reason is to prevent breaking changes in the future by properly modeling unk
 
 - Add `EntryFlags` to expose the general purpose bit flags on file entries
 - Add `ZipFileHeaderRecord::comment` for zip entry central directory comment
-- Allow writing file names encoded as byte verbatim without requiring UTF-8 through `EntryName` argument
+- Allow writing file names encoded as byte verbatim without requiring UTF-8 through `EntryPath` argument
 - Add ability to write archive and central directory comments
 - Add flags and DOS time accessors after local header is written
 - Add `MAX_CENTRAL_DIRECTORY_RECORD_SIZE` to size buffers according to pathologically large central directories 
