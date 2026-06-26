@@ -36,6 +36,11 @@ impl Error {
     pub fn kind(&self) -> &ErrorKind {
         &self.inner.kind
     }
+
+    /// The kind of error that occurred
+    pub fn into_kind(self) -> ErrorKind {
+        self.inner.kind
+    }
 }
 
 #[derive(Debug)]
