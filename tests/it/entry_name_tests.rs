@@ -17,7 +17,8 @@ fn write_one<'n>(name: impl Into<EntryName<'n>>) -> Vec<u8> {
 #[test]
 fn borrowed_str_reference_is_an_entry_name() {
     let name = "file.txt";
-    let output = write_one(&name);
+    let name_ref: &&str = &name;
+    let output = write_one(name_ref);
     let archive = ZipArchive::from_slice(&output).unwrap();
     let entry = archive.entries().next().unwrap().unwrap();
 
