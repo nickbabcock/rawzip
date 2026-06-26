@@ -124,8 +124,8 @@ impl ZipArchiveWriterBuilder {
     ///     .build(&mut output);
     ///
     /// // Add files normally
-    /// let mut file = archive.new_file("data.txt").create().unwrap();
-    /// let mut writer = rawzip::ZipDataWriter::new(&mut file);
+    /// let (mut file, config) = archive.new_file("data.txt").start().unwrap();
+    /// let mut writer = config.wrap(&mut file);
     /// writer.write_all(b"File content").unwrap();
     /// let (_, desc) = writer.finish().unwrap();
     /// file.finish(desc).unwrap();
@@ -232,13 +232,13 @@ impl<W> ZipArchiveWriter<W> {
     ///
     /// // 1. Get local header offset
     /// let local_header_offset = archive.stream_offset();
-    /// let mut file = archive.new_file("test.txt").create().unwrap();
+    /// let (mut file, config) = archive.new_file("test.txt").start().unwrap();
     ///
     /// // 2. Get start of data offset
     /// let data_start_offset = file.stream_offset();
     ///
     /// // Write some data
-    /// let mut writer = rawzip::ZipDataWriter::new(&mut file);
+    /// let mut writer = config.wrap(&mut file);
     /// writer.write_all(b"Hello World").unwrap();
     /// let (_, desc) = writer.finish().unwrap();
     ///
@@ -366,36 +366,36 @@ where
     ///
     /// ```rust
     /// # use std::io::{Cursor, Write};
-    /// # use rawzip::{ZipArchive, ZipArchiveWriter, ZipDataWriter, extra_fields::ExtraFieldId, Header};
+    /// # use rawzip::{ZipArchive, ZipArchiveWriter, extra_fields::ExtraFieldId, Header};
     /// let mut output = Cursor::new(Vec::new());
     /// let mut archive = ZipArchiveWriter::new(&mut output);
     ///
     /// let my_custom_field = ExtraFieldId::new(0x6666);
     ///
     /// // File with extra fields only in the local file header
-    /// let mut local_file = archive.new_file("video.mp4")
+    /// let (mut local_file, config) = archive.new_file("video.mp4")
     ///     .extra_field(my_custom_field, b"field1", Header::LOCAL)?
-    ///     .create()?;
-    /// let mut writer = ZipDataWriter::new(&mut local_file);
+    ///     .start()?;
+    /// let mut writer = config.wrap(&mut local_file);
     /// writer.write_all(b"video data")?;
     /// let (_, desc) = writer.finish()?;
     /// local_file.finish(desc)?;
     ///
     /// // File with extra fields only in the central directory
-    /// let mut central_file = archive.new_file("document.pdf")
+    /// let (mut central_file, config) = archive.new_file("document.pdf")
     ///     .extra_field(my_custom_field, b"field2", Header::CENTRAL)?
-    ///     .create()?;
-    /// let mut writer = ZipDataWriter::new(&mut central_file);
+    ///     .start()?;
+    /// let mut writer = config.wrap(&mut central_file);
     /// writer.write_all(b"PDF content")?;
     /// let (_, desc) = writer.finish()?;
     /// central_file.finish(desc)?;
     ///
     /// // File with extra fields in both headers for maximum compatibility
     /// assert_eq!(Header::default(), Header::LOCAL | Header::CENTRAL);
-    /// let mut both_file = archive.new_file("important.dat")
+    /// let (mut both_file, config) = archive.new_file("important.dat")
     ///     .extra_field(my_custom_field, b"field3", Header::default())?
-    ///     .create()?;
-    /// let mut writer = ZipDataWriter::new(&mut both_file);
+    ///     .start()?;
+    /// let mut writer = config.wrap(&mut both_file);
     /// writer.write_all(b"important data")?;
     /// let (_, desc) = writer.finish()?;
     /// both_file.finish(desc)?;
@@ -480,16 +480,6 @@ where
     pub fn comment(mut self, comment: impl Into<Vec<u8>>) -> Self {
         self.file_comment = comment.into();
         self
-    }
-
-    /// Creates the file entry and returns a writer for the file's content.
-    #[deprecated(
-        since = "0.4.0",
-        note = "Use `start()` method instead as it allows for more flexibility (ie: CRC configuration)"
-    )]
-    pub fn create(self) -> Result<ZipEntryWriter<'archive, W>, Error> {
-        let (entry_writer, _) = self.start()?;
-        Ok(entry_writer)
     }
 
     /// Mark the start of file data
@@ -1127,15 +1117,6 @@ pub struct ZipDataWriter<W> {
 }
 
 impl<W> ZipDataWriter<W> {
-    /// Creates a new `ZipDataWriter` that writes to an underlying writer.
-    #[deprecated(
-        since = "0.4.0",
-        note = "Use the tuple-based API: `ZipFileBuilder::start()` returns `(writer, builder)` which can propagate the CRC32 option"
-    )]
-    pub fn new(inner: W) -> Self {
-        Self::with_crc32_option(inner, Crc32Option::default())
-    }
-
     /// Creates a new `ZipDataWriter` with the specified CRC32 option.
     ///
     /// This is an internal method. Use the tuple-based API via
@@ -1772,33 +1753,5 @@ mod tests {
         archive.set_comment(too_long);
 
         assert!(archive.finish().is_err());
-    }
-
-    #[test]
-    #[allow(deprecated)]
-    fn test_deprecated_create_method() {
-        let data = b"Hello, deprecated API!";
-
-        // Test that deprecated create() method still works
-        let mut output = Cursor::new(Vec::new());
-        let mut archive = ZipArchiveWriter::new(&mut output);
-        let mut entry = archive.new_file("deprecated.txt").create().unwrap();
-        let mut writer = ZipDataWriter::new(&mut entry);
-        writer.write_all(data).unwrap();
-        let (_, descriptor) = writer.finish().unwrap();
-        entry.finish(descriptor).unwrap();
-        archive.finish().unwrap();
-
-        // Verify the archive can be read
-        let output = output.into_inner();
-        let archive = ZipArchive::from_slice(&output).unwrap();
-        let mut entries = archive.entries();
-        let entry = entries.next_entry().unwrap().unwrap();
-        let wayfinder = entry.wayfinder();
-        let entry = archive.get_entry(wayfinder).unwrap();
-        let mut verifier = entry.verifying_reader(entry.data());
-        let mut actual = Vec::new();
-        std::io::copy(&mut verifier, &mut actual).unwrap();
-        assert_eq!(&actual, data);
     }
 }
