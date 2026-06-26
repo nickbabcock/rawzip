@@ -1,8 +1,10 @@
 ## Unreleased
 
-The bad news is that this is a breaking change.
+> Oh boy, look how big the changelog is. Surely, this library has lost its way.
 
-The good news is that rawzip is still the same low-level, bring your own dependencies that you know and love. The breaking changes are minimal or esoteric. The biggest thing will be the deprecation of the enum:
+The good news is that the breaking changes are minimal or esoteric and rawzip is still the same low-level, lean, BYO-dependencies that you know and love. The goal for 0.5 has been a focus on correctness and exposing the foundation to be built ontop of for years to come. This includes exposing primitives to allow reading and writing encrypts zips, both ZipCrypto and WinZip AES (again, without dependencies).
+
+The most visible change will be the deprecation of the enum:
 
 ```rust
 CompressionMethod::Deflate
@@ -44,6 +46,7 @@ The reason is to prevent breaking changes in the future by properly modeling unk
 
 - Add `EntryFlags` to expose the general purpose bit flags on file entries
 - Add `ZipFileHeaderRecord::comment` for zip entry central directory comment
+- Allow writing file names encoded as byte verbatim without requiring UTF-8 through `EntryName` argument
 - Add ability to write archive and central directory comments
 - Add flags and DOS time accessors after local header is written
 - Add `MAX_CENTRAL_DIRECTORY_RECORD_SIZE` to size buffers according to pathologically large central directories 
