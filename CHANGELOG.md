@@ -1,6 +1,77 @@
 ## Unreleased
 
+> Oh boy, look how big the changelog is. Surely, this library has lost its way.
+
+The good news is that the breaking changes are minimal or esoteric and rawzip is still the same low-level, lean, BYO-dependencies that you know and love. The goal for 0.5 has been a focus on correctness and exposing the foundation to be built ontop of for years to come. This includes exposing primitives to allow reading and writing encrypts zips, both ZipCrypto and WinZip AES (again, without dependencies).
+
+The most visible change will be the deprecation of the enum:
+
+```rust
+CompressionMethod::Deflate
+```
+
+in favor of associated constants:
+
+```rust
+CompressionMethod::DEFLATE
+```
+
+The reason is to prevent breaking changes in the future by properly modeling unknown compression methods that may be defined in future spec revisions. PR (#132)(https://github.com/nickbabcock/rawzip/pull/132) 
+
+### Breaking Changes
+
+- Fix incorrect compression methods:
+    - 10: Terse -> DclImplode (PKWARE DCL Imploding, old IBM TERSE)
+    - 16: add Cmpsc (IBM z/OS CMPSC Compression)
+    - 18: Lz77 -> Terse (IBM TERSE new)
+    - 19: add Lz77 (IBM LZ77 z Architecture)
+- `CompressionMethod` is a newtype over `u16` instead of an enum
+- Remove `ReaderAt` type parameter on `ZipVerifier` 
+- `ZipReader::claim_verifier` borrows self and is infallible 
+- Remove accidentally exposed (and unused) `StackVecIter`
+- Remove redundant getters on `ZipVerification`
+- Remove `ZipSliceArchive::as_bytes` as `get_ref` is strictly better
+- Un-deprecate `ZipSliceArchive::into_reader`, now constrained to `T: ReaderAt`
+- Rename `ZipSliceArchive::into_zip_archive` to `into_cursor_archive`
+- Remove `MissingZip64EndOfCentralDirectory` error kind as it is no longer possible to trigger
+- Relocate `ZipSliceEntry::{file_path,extra_fields}` behind lifetime accurate `ZipSliceEntry::local_header`
+- Seal `TimeZoneMarker` trait
+- Remove deprecated `ZipFileBuilder::create`
+
+### Performance
+
+- CRC calculation thoughput improvement of 10%
+- Improve end of central directory (EOCD) detection by 2-8x with SWAR detection
+- Adopt adaptive window scanning for (EOCD) for Read implementations starting at 1 KiB for a 20x speedup 
+
+### Features and Changes
+
+- Expose the slice reading APIs under "no std" and "no alloc" cargo feature flags
+- Add `EntryFlags` to expose the general purpose bit flags on file entries
+- Add `ZipFileHeaderRecord::comment` for zip entry central directory comment
+- Allow writing file names encoded as byte verbatim without requiring UTF-8 through `EntryPath` argument
+- Add ability to write archive and central directory comments
+- Add flags and DOS time accessors after local header is written
+- Add `MAX_CENTRAL_DIRECTORY_RECORD_SIZE` to size buffers according to pathologically large central directories 
+- Built-in CRC/size verification is now central-directory authoritative and never reads the trailing data descriptor to bring rawzip in line with other zip file libraries
+- Add functions for extracting zip entry data descriptors for those that want to cross validate values 
+- Add `ExtraFieldId::AES` and an integration test demonstrating how to read AES encrypted zip files
+- Add `ZipFileBuilder::encrypted` to set the encryption general purpose bit (caller is still responsible for actually doing the encryption).
+- Add `ZipSliceArchive::get_ref` and  `into_inner` to borrow or recover the underlying data
+- Add `Add ZipArchive::get_mut` to mutably access the reader
+- Expose local header crc, uncompressed size, and compressed size
+- Expose `Crc32` streaming accumulator
+- Preserve trailing slash in directories when normalization required
+- Implement ReaderAt for unsized `[u8]` slice, unlocking `ReaderAt` for `Box<[u8]>`, `Arc<[u8]>`, and `Rc<[u8]>`
+- Implement ReaderAt for `Cow<[u8]>`
+- Verifying readers now unconditionally verify all CRCs values (similar to other zip libraries) instead of treating a CRC value of 0 as special (like go's) signal to skip verification.
+- Add `From<ZipSliceArchive<impl ReaderAt>> for ZipArchive<R>`
+- Fill out implementation of `rawzip::Error::source`
 - Raise minimum supported Rust version (MSRV) to 1.85 and move to the 2024 edition
+- Fix classic zip with 65536 entries failure to parse edge case
+- Fix failure to parse zip64 files that have a central directory size >= 4 GiB
+- Fix trailing slashes present in writer file entries in normalization
+- Update display and debug implementations for `CompressionMethod`
 
 ## v0.4.4 - March 9th, 2026
 
