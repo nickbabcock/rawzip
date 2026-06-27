@@ -156,6 +156,25 @@ jobs:
       - name: Build for wasm32-unknown-unknown
         run: cargo build --target wasm32-unknown-unknown --verbose
 
+  no-std:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: stable
+          targets: x86_64-unknown-none
+      - name: Build core tier (no_std, no allocator)
+        run: cargo build --no-default-features --target x86_64-unknown-none --verbose
+      - name: Build alloc tier (no_std + alloc)
+        run: cargo build --no-default-features --features alloc --target x86_64-unknown-none --verbose
+      - name: Test core tier
+        run: cargo test --no-default-features --lib --verbose
+      - name: Test alloc tier
+        run: cargo test --no-default-features --features alloc --lib --verbose
+
   big-example:
     runs-on: ubuntu-latest
     steps:

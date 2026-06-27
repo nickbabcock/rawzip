@@ -8,9 +8,11 @@
 ///
 /// For usage example, see
 /// [`ZipFileBuilder::extra_field`](crate::ZipFileBuilder::extra_field)
+#[cfg(feature = "std")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Header(u8);
 
+#[cfg(feature = "std")]
 impl Header {
     /// Include data only in the local file header.
     pub const LOCAL: Self = Self(0b01);
@@ -39,13 +41,15 @@ impl Header {
     }
 }
 
+#[cfg(feature = "std")]
 impl Default for Header {
     fn default() -> Self {
         Self(Self::LOCAL.0 | Self::CENTRAL.0)
     }
 }
 
-impl std::ops::BitOr for Header {
+#[cfg(feature = "std")]
+impl core::ops::BitOr for Header {
     type Output = Self;
 
     #[inline]
@@ -54,14 +58,16 @@ impl std::ops::BitOr for Header {
     }
 }
 
-impl std::ops::BitOrAssign for Header {
+#[cfg(feature = "std")]
+impl core::ops::BitOrAssign for Header {
     #[inline]
     fn bitor_assign(&mut self, rhs: Self) {
         self.0 |= rhs.0;
     }
 }
 
-impl std::ops::BitAnd for Header {
+#[cfg(feature = "std")]
+impl core::ops::BitAnd for Header {
     type Output = Self;
 
     #[inline]
@@ -70,7 +76,8 @@ impl std::ops::BitAnd for Header {
     }
 }
 
-impl std::ops::BitAndAssign for Header {
+#[cfg(feature = "std")]
+impl core::ops::BitAndAssign for Header {
     #[inline]
     fn bitand_assign(&mut self, rhs: Self) {
         self.0 &= rhs.0;
@@ -140,7 +147,7 @@ impl EntryFlags {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "std"))]
 mod tests {
     use super::*;
 

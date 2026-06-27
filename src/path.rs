@@ -1,8 +1,10 @@
-//! Path handling for ZIP archives with type-safe raw and normalized paths.
+//! Path handling for ZIP archive paths.
 //!
-//! This module provides a comprehensive system for handling file paths from ZIP
-//! archives with strong safety guarantees against path traversal attacks (zip
-//! slip vulnerabilities).
+//! This module provides raw access to file paths from ZIP archives.
+#![cfg_attr(
+    feature = "alloc",
+    doc = "With the `alloc` feature, it also provides normalized path types with strong safety guarantees against path traversal attacks (zip slip vulnerabilities)."
+)]
 //!
 //! ## Path Types
 //!
@@ -11,8 +13,14 @@
 //!
 //! - [`RawPath`]: Direct bytes from ZIP archive (⚠️ may contain malicious
 //!   paths)
-//! - [`NormalizedPath`]: Validated and sanitized path
-//! - [`NormalizedPathBuf`]: Owned version of normalized path
+#![cfg_attr(
+    feature = "alloc",
+    doc = "- [`NormalizedPath`]: Validated and sanitized path"
+)]
+#![cfg_attr(
+    feature = "alloc",
+    doc = "- [`NormalizedPathBuf`]: Owned version of normalized path"
+)]
 //!
 //! ## Raw Paths
 //!
@@ -25,77 +33,90 @@
 //! - Absolute paths: `/etc/passwd`, `C:\\Windows\\system32`
 //! - Invalid UTF-8: Arbitrary byte sequences that aren't valid text
 //!
-//! ## Normalized Paths
-//!
-//! Normalized paths have been validated and sanitized according to these rules:
-//!
-//! - Assumed to be UTF-8 ([zip file names aren't always
-//!   UTF-8](https://fasterthanli.me/articles/the-case-for-sans-io#character-encoding-differences))
-//! - Path separators: All backslashes (`\`) converted to forward slashes (`/`)
-//! - Redundant slashes: Multiple consecutive slashes (`//`) reduced to single
-//!   slash
-//! - Relative components: Current directory (`.`) and parent directory (`..`)
-//!   resolved
-//! - Leading separators: Absolute paths made relative (`/foo` → `foo`)
-//! - Drive letters: Windows drive prefixes removed (`C:\\foo` → `foo`)
-//! - Escape prevention: Paths cannot escape the archive root directory
-//!
-//! ## Usage Examples
-//!
-//! ```rust
-//! use rawzip::path::ZipFilePath;
-//!
-//! // From raw bytes
-//! let raw_path = ZipFilePath::from_bytes(b"../../../etc/passwd");
-//! let safe_path = raw_path.try_normalize()?; // Returns error if invalid UTF-8
-//! assert_eq!(safe_path.as_str(), "etc/passwd");
-//!
-//! // From string
-//! let normalized_path = ZipFilePath::from_str("dir\\file.txt");
-//! assert_eq!(normalized_path.as_str(), "dir/file.txt");
-//! assert_eq!(String::from(normalized_path), "dir/file.txt");
-//!
-//! // Backslashes to forward slashes
-//! let path = ZipFilePath::from_str("dir\\subdir\\file.txt");
-//! assert_eq!(path.as_str(), "dir/subdir/file.txt");
-//!
-//! // Remove redundant slashes
-//! let path = ZipFilePath::from_str("dir//subdir///file.txt");
-//! assert_eq!(path.as_str(), "dir/subdir/file.txt");
-//!
-//! // Resolve relative components
-//! let path = ZipFilePath::from_str("dir/../file.txt");
-//! assert_eq!(path.as_str(), "file.txt");
-//!
-//! // Remove leading slashes (absolute → relative)
-//! let path = ZipFilePath::from_str("/etc/passwd");
-//! assert_eq!(path.as_str(), "etc/passwd");
-//!
-//! // Prevent directory traversal
-//! let path = ZipFilePath::from_str("../../../etc/passwd");
-//! assert_eq!(path.as_str(), "etc/passwd");
-//!
-//! // Get string from normalized path
-//! let path = ZipFilePath::from_str("dir/file.txt");
-//! let my_str = String::from(path.into_owned());
-//! assert_eq!(my_str, String::from("dir/file.txt"));
-//!
-//! # Ok::<(), Box<dyn std::error::Error>>(())
-//! ```
-//!
-//! ## UTF-8 Encoding Detection
-//!
-//! The library automatically detects when paths contain characters that require
-//! UTF-8 encoding in ZIP files (beyond the default CP-437 encoding). This
-//! information is used internally when creating ZIP archives.
+#![cfg_attr(
+    feature = "alloc",
+    doc = r#"
+## Normalized Paths
 
-use crate::{Error, ZipStr};
-use std::borrow::Cow;
+Normalized paths have been validated and sanitized according to these rules:
+
+- Assumed to be UTF-8 ([zip file names aren't always
+  UTF-8](https://fasterthanli.me/articles/the-case-for-sans-io#character-encoding-differences))
+- Path separators: All backslashes (`\`) converted to forward slashes (`/`)
+- Redundant slashes: Multiple consecutive slashes (`//`) reduced to single
+  slash
+- Relative components: Current directory (`.`) and parent directory (`..`)
+  resolved
+- Leading separators: Absolute paths made relative (`/foo` -> `foo`)
+- Drive letters: Windows drive prefixes removed (`C:\\foo` -> `foo`)
+- Escape prevention: Paths cannot escape the archive root directory
+
+## Usage Examples
+
+```rust
+use rawzip::path::ZipFilePath;
+
+// From raw bytes
+let raw_path = ZipFilePath::from_bytes(b"../../../etc/passwd");
+let safe_path = raw_path.try_normalize()?; // Returns error if invalid UTF-8
+assert_eq!(safe_path.as_str(), "etc/passwd");
+
+// From string
+let normalized_path = ZipFilePath::from_str("dir\\file.txt");
+assert_eq!(normalized_path.as_str(), "dir/file.txt");
+assert_eq!(String::from(normalized_path), "dir/file.txt");
+
+// Backslashes to forward slashes
+let path = ZipFilePath::from_str("dir\\subdir\\file.txt");
+assert_eq!(path.as_str(), "dir/subdir/file.txt");
+
+// Remove redundant slashes
+let path = ZipFilePath::from_str("dir//subdir///file.txt");
+assert_eq!(path.as_str(), "dir/subdir/file.txt");
+
+// Resolve relative components
+let path = ZipFilePath::from_str("dir/../file.txt");
+assert_eq!(path.as_str(), "file.txt");
+
+// Remove leading slashes (absolute -> relative)
+let path = ZipFilePath::from_str("/etc/passwd");
+assert_eq!(path.as_str(), "etc/passwd");
+
+// Prevent directory traversal
+let path = ZipFilePath::from_str("../../../etc/passwd");
+assert_eq!(path.as_str(), "etc/passwd");
+
+// Get string from normalized path
+let path = ZipFilePath::from_str("dir/file.txt");
+let my_str = String::from(path.into_owned());
+assert_eq!(my_str, String::from("dir/file.txt"));
+
+# Ok::<(), Box<dyn std::error::Error>>(())
+```
+
+## UTF-8 Encoding Detection
+
+The library automatically detects when paths contain characters that require
+UTF-8 encoding in ZIP files (beyond the default CP-437 encoding). This
+information is used internally when creating ZIP archives.
+"#
+)]
+
+#[cfg(feature = "alloc")]
+use crate::Error;
+use crate::ZipStr;
+#[cfg(feature = "alloc")]
+use alloc::borrow::Cow;
+#[cfg(feature = "alloc")]
+use alloc::string::String;
 
 /// Raw path data directly from a ZIP archive.
 ///
 /// **Warning**: Contains unvalidated bytes that may include malicious path components.
-/// Use [`ZipFilePath::try_normalize()`] to create a safe path.
+#[cfg_attr(
+    feature = "alloc",
+    doc = "Use [`ZipFilePath::try_normalize()`] to create a safe path."
+)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct RawPath<'a>(ZipStr<'a>);
 
@@ -110,9 +131,11 @@ impl AsRef<[u8]> for RawPath<'_> {
 ///
 /// This path has been validated and sanitized according to the normalization
 /// rules described in the module documentation.
+#[cfg(feature = "alloc")]
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct NormalizedPath<'a>(Cow<'a, str>);
 
+#[cfg(feature = "alloc")]
 impl AsRef<[u8]> for NormalizedPath<'_> {
     #[inline]
     fn as_ref(&self) -> &[u8] {
@@ -120,6 +143,7 @@ impl AsRef<[u8]> for NormalizedPath<'_> {
     }
 }
 
+#[cfg(feature = "alloc")]
 impl AsRef<str> for NormalizedPath<'_> {
     #[inline]
     fn as_ref(&self) -> &str {
@@ -130,9 +154,11 @@ impl AsRef<str> for NormalizedPath<'_> {
 /// An owned, normalized path from a ZIP archive.
 ///
 /// Owned version of [`NormalizedPath`] with the same safety guarantees.
+#[cfg(feature = "alloc")]
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct NormalizedPathBuf(String);
 
+#[cfg(feature = "alloc")]
 impl AsRef<[u8]> for NormalizedPathBuf {
     #[inline]
     fn as_ref(&self) -> &[u8] {
@@ -140,6 +166,7 @@ impl AsRef<[u8]> for NormalizedPathBuf {
     }
 }
 
+#[cfg(feature = "alloc")]
 impl AsRef<str> for NormalizedPathBuf {
     #[inline]
     fn as_ref(&self) -> &str {
@@ -156,8 +183,11 @@ pub struct ZipFilePath<R> {
 impl ZipFilePath<()> {
     /// Creates a raw path from bytes.
     ///
-    /// **Warning**: The resulting path is unvalidated. Use [`ZipFilePath::try_normalize()`]
-    /// to create a safe path.
+    /// **Warning**: The resulting path is unvalidated.
+    #[cfg_attr(
+        feature = "alloc",
+        doc = "Use [`ZipFilePath::try_normalize()`] to create a safe path."
+    )]
     #[inline]
     pub fn from_bytes(data: &[u8]) -> ZipFilePath<RawPath<'_>> {
         ZipFilePath {
@@ -169,6 +199,7 @@ impl ZipFilePath<()> {
     ///
     /// The path is automatically normalized according to the rules described in the module
     /// documentation. When possible, the original string reference is preserved to avoid allocation.
+    #[cfg(feature = "alloc")]
     #[inline]
     #[allow(clippy::should_implement_trait)] // Can't implement FromStr due to lifetime issues
     pub fn from_str(mut name: &str) -> ZipFilePath<NormalizedPath<'_>> {
@@ -201,6 +232,7 @@ impl ZipFilePath<()> {
         }
     }
 
+    #[cfg(feature = "alloc")]
     fn normalize_alloc(s: &str) -> String {
         // 4.4.17.1 All slashes MUST be forward slashes '/'
         let s = s.replace('\\', "/");
@@ -263,6 +295,7 @@ where
     }
 }
 
+#[cfg(any(feature = "std", test))]
 pub(crate) fn str_needs_utf8(s: &str) -> bool {
     for ch in s.chars() {
         let code_point = ch as u32;
@@ -292,10 +325,11 @@ impl<'a> ZipFilePath<RawPath<'a>> {
     /// # Errors
     ///
     /// Returns an error if the file path contains invalid UTF-8 sequences.
+    #[cfg(feature = "alloc")]
     #[inline]
     pub fn try_normalize(self) -> Result<ZipFilePath<NormalizedPath<'a>>, Error> {
         let raw_data = self.data.0;
-        let name = std::str::from_utf8(raw_data.as_bytes()).map_err(Error::utf8)?;
+        let name = core::str::from_utf8(raw_data.as_bytes()).map_err(Error::utf8)?;
         Ok(ZipFilePath::from_str(name))
     }
 }
@@ -307,6 +341,7 @@ impl AsRef<[u8]> for ZipFilePath<RawPath<'_>> {
     }
 }
 
+#[cfg(feature = "alloc")]
 impl AsRef<str> for ZipFilePath<NormalizedPath<'_>> {
     #[inline]
     fn as_ref(&self) -> &str {
@@ -314,6 +349,7 @@ impl AsRef<str> for ZipFilePath<NormalizedPath<'_>> {
     }
 }
 
+#[cfg(feature = "alloc")]
 impl AsRef<str> for ZipFilePath<NormalizedPathBuf> {
     #[inline]
     fn as_ref(&self) -> &str {
@@ -321,6 +357,7 @@ impl AsRef<str> for ZipFilePath<NormalizedPathBuf> {
     }
 }
 
+#[cfg(feature = "alloc")]
 impl From<ZipFilePath<NormalizedPathBuf>> for String {
     #[inline]
     fn from(path: ZipFilePath<NormalizedPathBuf>) -> Self {
@@ -328,6 +365,7 @@ impl From<ZipFilePath<NormalizedPathBuf>> for String {
     }
 }
 
+#[cfg(feature = "alloc")]
 impl From<ZipFilePath<NormalizedPath<'_>>> for String {
     #[inline]
     fn from(path: ZipFilePath<NormalizedPath<'_>>) -> Self {
@@ -335,6 +373,7 @@ impl From<ZipFilePath<NormalizedPath<'_>>> for String {
     }
 }
 
+#[cfg(feature = "alloc")]
 impl<'a> ZipFilePath<NormalizedPath<'a>> {
     /// Returns the normalized string slice.
     #[inline]
@@ -358,6 +397,7 @@ impl<'a> ZipFilePath<NormalizedPath<'a>> {
     /// Normalization collapses any run of trailing separators into a single
     /// `/`, so removing one slash is sufficient. The original borrow is
     /// preserved when possible.
+    #[cfg(any(feature = "std", test))]
     #[inline]
     pub(crate) fn trim_trailing_slash(self) -> ZipFilePath<NormalizedPath<'a>> {
         let data = match self.data.0 {
@@ -375,6 +415,7 @@ impl<'a> ZipFilePath<NormalizedPath<'a>> {
     }
 }
 
+#[cfg(feature = "alloc")]
 impl ZipFilePath<NormalizedPathBuf> {
     /// Returns the normalized string slice.
     #[inline]
@@ -403,10 +444,12 @@ impl ZipFilePath<NormalizedPathBuf> {
 /// // Exact bytes, no normalization, no UTF-8 flag.
 /// let path = EntryPath::verbatim(b"odd\x05name");
 /// ```
+#[cfg(feature = "alloc")]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EntryPath<'a>(pub(crate) EntryPathInner<'a>);
 
 /// The private path-writing policy.
+#[cfg(feature = "alloc")]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum EntryPathInner<'a> {
     /// Normalize UTF-8 text and set utf-8 flag when needed.
@@ -417,6 +460,7 @@ pub(crate) enum EntryPathInner<'a> {
     Verbatim(Cow<'a, [u8]>),
 }
 
+#[cfg(feature = "alloc")]
 impl<'a> EntryPath<'a> {
     /// Creates a normalized UTF-8 path, setting utf-8 flag when needed.
     #[inline]
@@ -431,6 +475,7 @@ impl<'a> EntryPath<'a> {
     }
 }
 
+#[cfg(feature = "alloc")]
 impl<'a, T> From<&'a T> for EntryPath<'a>
 where
     T: AsRef<str> + ?Sized,
@@ -441,6 +486,7 @@ where
     }
 }
 
+#[cfg(feature = "alloc")]
 impl<'a> From<String> for EntryPath<'a> {
     #[inline]
     fn from(value: String) -> Self {
@@ -448,6 +494,7 @@ impl<'a> From<String> for EntryPath<'a> {
     }
 }
 
+#[cfg(feature = "alloc")]
 impl<'a> From<Cow<'a, str>> for EntryPath<'a> {
     #[inline]
     fn from(value: Cow<'a, str>) -> Self {
@@ -455,6 +502,7 @@ impl<'a> From<Cow<'a, str>> for EntryPath<'a> {
     }
 }
 
+#[cfg(feature = "alloc")]
 impl<'a> From<ZipFilePath<NormalizedPath<'a>>> for EntryPath<'a> {
     #[inline]
     fn from(value: ZipFilePath<NormalizedPath<'a>>) -> Self {
@@ -462,6 +510,7 @@ impl<'a> From<ZipFilePath<NormalizedPath<'a>>> for EntryPath<'a> {
     }
 }
 
+#[cfg(feature = "alloc")]
 impl<'a> From<ZipFilePath<NormalizedPathBuf>> for EntryPath<'a> {
     #[inline]
     fn from(value: ZipFilePath<NormalizedPathBuf>) -> Self {
@@ -469,7 +518,7 @@ impl<'a> From<ZipFilePath<NormalizedPathBuf>> for EntryPath<'a> {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "alloc"))]
 mod tests {
     use super::*;
     use rstest::rstest;

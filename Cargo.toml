@@ -12,6 +12,11 @@ categories = ["filesystem", "compression", "parser-implementations"]
 include = ["src/**/*.rs", "/examples", "LICENSE.txt", "assets", "tests"]
 rust-version = "1.85"
 
+[features]
+default = ["std"]
+alloc = []
+std = ["alloc"]
+
 [dependencies]
 
 [dev-dependencies]

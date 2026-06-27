@@ -1,4 +1,7 @@
-use crate::{Error, ErrorKind, Header, utils::le_u16};
+use crate::utils::le_u16;
+#[cfg(feature = "std")]
+use crate::{Error, ErrorKind, Header};
+#[cfg(feature = "std")]
 use std::io::Write;
 
 /// A numeric identifier for an extra field in a Zip archive.
@@ -124,6 +127,7 @@ impl<'a> Iterator for ExtraFields<'a> {
 }
 
 /// Container for extra fields with a shared data buffer and cached sizes.
+#[cfg(feature = "std")]
 #[derive(Debug, Clone)]
 pub(crate) struct ExtraFieldsContainer {
     entries: StackVec<Header, 5>,
@@ -132,6 +136,7 @@ pub(crate) struct ExtraFieldsContainer {
     pub(crate) central_size: u16,
 }
 
+#[cfg(feature = "std")]
 impl ExtraFieldsContainer {
     pub fn new() -> Self {
         Self {
@@ -221,6 +226,7 @@ impl ExtraFieldsContainer {
 /// (by one byte), but it's still an extremely effective no dependency, no
 /// unsafe solution, as benchmarks showed a 33% throughput improvement when
 /// writing out files with timestamps.
+#[cfg(feature = "std")]
 #[derive(Debug, Clone)]
 pub(crate) enum StackVec<T, const N: usize>
 where
@@ -232,6 +238,7 @@ where
     Large(Vec<T>),
 }
 
+#[cfg(feature = "std")]
 impl<T, const N: usize> StackVec<T, N>
 where
     T: Copy + Clone,
@@ -273,6 +280,7 @@ where
 }
 
 // Specialized methods for StackVec<u8, N> (byte buffers)
+#[cfg(feature = "std")]
 impl<const N: usize> StackVec<u8, N> {
     pub fn extend_from_slice(&mut self, slice: &[u8]) {
         match self {
@@ -297,7 +305,7 @@ impl<const N: usize> StackVec<u8, N> {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "std"))]
 mod tests {
     use std::io::Cursor;
 

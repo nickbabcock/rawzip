@@ -7,86 +7,93 @@
 //! When reading a ZIP file, [`ZipDateTimeKind`] will provide information about
 //! the timestamp's original time zone (UTC and local time)
 //!
-//! However, when writing a ZIP file, only a [`UtcDateTime`] is supported.
-//!
-//! # Example: Copying Modification Times
-//!
-//! This example shows how to read a ZIP file and create a new one while
-//! preserving modification times:
-//!
-//! ```
-//! use rawzip::{ZipArchive, ZipArchiveWriter, ZipDataWriter};
-//! use rawzip::time::{ZipDateTimeKind, UtcDateTime};
-//! use std::io::Write;
-//!
-//! // Read a test ZIP file with timestamps
-//! let input_data = include_bytes!("../assets/time-go.zip");
-//! let input_archive = ZipArchive::from_slice(input_data).unwrap();
-//!
-//! // Create output archive
-//! let mut output_data = Vec::new();
-//! let mut output_archive = ZipArchiveWriter::new(&mut output_data);
-//!
-//! // Copy each entry with its modification time
-//! let mut entries = input_archive.entries();
-//! while let Ok(Some(entry)) = entries.next_entry() {
-//!     let name = entry.file_path().try_normalize().unwrap().as_ref().to_string();
-//!     let modification_time = entry.last_modified();
-//!     
-//!     let utc_time = match modification_time {
-//!         ZipDateTimeKind::Utc(utc_time) => utc_time,
-//!         ZipDateTimeKind::Local(local_time) => {
-//!             // Convert local time to UTC by reinterpreting the components
-//!             // This treats the local time as if it were UTC
-//!             UtcDateTime::from_components(
-//!                 local_time.year(),
-//!                 local_time.month(),
-//!                 local_time.day(),
-//!                 local_time.hour(),
-//!                 local_time.minute(),
-//!                 local_time.second(),
-//!                 local_time.nanosecond()
-//!             ).unwrap()
-//!         }
-//!     };
-//!
-//!     if !entry.is_dir() {
-//!         // Copy file with preserved modification time
-//!         let (mut entry, config) = output_archive.new_file(&name)
-//!             .last_modified(utc_time)
-//!             .start()
-//!             .unwrap();
-//!         let mut writer = config.wrap(&mut entry);
-//!         writer.write_all(b"example data").unwrap();
-//!         let (_, descriptor) = writer.finish().unwrap();
-//!         entry.finish(descriptor).unwrap();
-//!     } else {
-//!         // Copy directory with preserved modification time
-//!         output_archive.new_dir(&name)
-//!             .last_modified(utc_time)
-//!             .create()
-//!             .unwrap();
-//!     }
-//! }
-//!
-//! output_archive.finish().unwrap();
-//!
-//! // Verify the output archive preserves timestamps
-//! let output_archive = ZipArchive::from_slice(&output_data).unwrap();
-//!
-//! assert!(output_archive.entries_hint() > 0, "Output should contain entries");
-//!
-//! // Verify at least one entry has a UTC timestamp
-//! let mut output_entries = output_archive.entries();
-//! let mut has_utc_timestamp = false;
-//! while let Ok(Some(entry)) = output_entries.next_entry() {
-//!     if matches!(entry.last_modified(), ZipDateTimeKind::Utc(_)) {
-//!         has_utc_timestamp = true;
-//!         break;
-//!     }
-//! }
-//! assert!(has_utc_timestamp, "Output should contain UTC timestamps");
-//! ```
+#![cfg_attr(
+    feature = "std",
+    doc = "When writing a ZIP file, only a [`UtcDateTime`] is supported."
+)]
+#![cfg_attr(
+    feature = "std",
+    doc = r#"
+# Example: Copying Modification Times
+
+This example shows how to read a ZIP file and create a new one while
+preserving modification times:
+
+```
+use rawzip::{ZipArchive, ZipArchiveWriter, ZipDataWriter};
+use rawzip::time::{ZipDateTimeKind, UtcDateTime};
+use std::io::Write;
+
+// Read a test ZIP file with timestamps
+let input_data = include_bytes!("../assets/time-go.zip");
+let input_archive = ZipArchive::from_slice(input_data).unwrap();
+
+// Create output archive
+let mut output_data = Vec::new();
+let mut output_archive = ZipArchiveWriter::new(&mut output_data);
+
+// Copy each entry with its modification time
+let mut entries = input_archive.entries();
+while let Ok(Some(entry)) = entries.next_entry() {
+    let name = entry.file_path().try_normalize().unwrap().as_ref().to_string();
+    let modification_time = entry.last_modified();
+
+    let utc_time = match modification_time {
+        ZipDateTimeKind::Utc(utc_time) => utc_time,
+        ZipDateTimeKind::Local(local_time) => {
+            // Convert local time to UTC by reinterpreting the components
+            // This treats the local time as if it were UTC
+            UtcDateTime::from_components(
+                local_time.year(),
+                local_time.month(),
+                local_time.day(),
+                local_time.hour(),
+                local_time.minute(),
+                local_time.second(),
+                local_time.nanosecond()
+            ).unwrap()
+        }
+    };
+
+    if !entry.is_dir() {
+        // Copy file with preserved modification time
+        let (mut entry, config) = output_archive.new_file(&name)
+            .last_modified(utc_time)
+            .start()
+            .unwrap();
+        let mut writer = config.wrap(&mut entry);
+        writer.write_all(b"example data").unwrap();
+        let (_, descriptor) = writer.finish().unwrap();
+        entry.finish(descriptor).unwrap();
+    } else {
+        // Copy directory with preserved modification time
+        output_archive.new_dir(&name)
+            .last_modified(utc_time)
+            .create()
+            .unwrap();
+    }
+}
+
+output_archive.finish().unwrap();
+
+// Verify the output archive preserves timestamps
+let output_archive = ZipArchive::from_slice(&output_data).unwrap();
+
+assert!(output_archive.entries_hint() > 0, "Output should contain entries");
+
+// Verify at least one entry has a UTC timestamp
+let mut output_entries = output_archive.entries();
+let mut has_utc_timestamp = false;
+while let Ok(Some(entry)) = output_entries.next_entry() {
+    if matches!(entry.last_modified(), ZipDateTimeKind::Utc(_)) {
+        has_utc_timestamp = true;
+        break;
+    }
+}
+assert!(has_utc_timestamp, "Output should contain UTC timestamps");
+```
+"#
+)]
 
 use crate::{
     extra_fields::{ExtraFieldId, ExtraFields},
@@ -143,7 +150,7 @@ pub struct ZipDateTime<TZ = Utc> {
     minute: u8,      // 0-59
     second: u8,      // 0-59
     nanosecond: u32, // 0-999,999,999
-    _timezone: std::marker::PhantomData<TZ>,
+    _timezone: core::marker::PhantomData<TZ>,
 }
 
 /// Type alias for UTC timestamps
@@ -233,8 +240,8 @@ impl ZipDateTimeKind {
     }
 }
 
-impl std::fmt::Display for ZipDateTimeKind {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl core::fmt::Display for ZipDateTimeKind {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
             ZipDateTimeKind::Utc(dt) => dt.fmt(f),
             ZipDateTimeKind::Local(dt) => dt.fmt(f),
@@ -242,8 +249,8 @@ impl std::fmt::Display for ZipDateTimeKind {
     }
 }
 
-impl<TZ: TimeZoneMarker> std::fmt::Display for ZipDateTime<TZ> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl<TZ: TimeZoneMarker> core::fmt::Display for ZipDateTime<TZ> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         // Write out the date and time in ISO 8601 format. RFC 3339 requires a
         // time zone, which we won't have for local times.
         write!(
@@ -327,7 +334,7 @@ impl<TZ: TimeZoneMarker> ZipDateTime<TZ> {
             minute,
             second,
             nanosecond,
-            _timezone: std::marker::PhantomData,
+            _timezone: core::marker::PhantomData,
         })
     }
 
@@ -420,7 +427,7 @@ impl ZipDateTime<Utc> {
             minute,
             second,
             nanosecond: 0,
-            _timezone: std::marker::PhantomData,
+            _timezone: core::marker::PhantomData,
         }
     }
 
@@ -437,7 +444,7 @@ impl ZipDateTime<Utc> {
             minute,
             second,
             nanosecond,
-            _timezone: std::marker::PhantomData,
+            _timezone: core::marker::PhantomData,
         }
     }
 
@@ -469,7 +476,7 @@ impl ZipDateTime<Local> {
             minute: dos.minute(),
             second: dos.second(),
             nanosecond: 0,
-            _timezone: std::marker::PhantomData,
+            _timezone: core::marker::PhantomData,
         }
     }
 }
