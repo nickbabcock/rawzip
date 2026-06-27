@@ -48,7 +48,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         let (mut entry, config) = archive
             .new_file(&filename)
-            .compression_method(rawzip::CompressionMethod::Store)
+            .compression_method(rawzip::CompressionMethod::STORE)
             .start()?;
 
         let mut data_writer = config.wrap(&mut entry);
@@ -62,7 +62,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let (mut big_entry, config) = archive
         .new_file("big_zeros.dat")
-        .compression_method(rawzip::CompressionMethod::Zstd)
+        .compression_method(rawzip::CompressionMethod::ZSTD)
         .start()?;
 
     let encoder = zstd::Encoder::new(&mut big_entry, 3)?; // Compression level 3
@@ -87,7 +87,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
 
     let mut big_file_wayfinder = None;
-    let mut big_file_compression = rawzip::CompressionMethod::Store;
+    let mut big_file_compression = rawzip::CompressionMethod::STORE;
     let mut entries = archive.entries(&mut buffer);
     let mut entry_count = 0;
     while let Some(entry) = entries.next_entry()? {
@@ -117,7 +117,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     assert_eq!(
         big_file_compression,
-        rawzip::CompressionMethod::Zstd,
+        rawzip::CompressionMethod::ZSTD,
         "Expected big_zeros.dat to use Zstd compression"
     );
     let decoder = zstd::Decoder::new(reader)?;

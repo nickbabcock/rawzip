@@ -17,7 +17,7 @@ fn write_archive(
         for file_name in file_names {
             let mut builder = archive
                 .new_file(file_name)
-                .compression_method(rawzip::CompressionMethod::Store);
+                .compression_method(rawzip::CompressionMethod::STORE);
 
             if let Some(last_modified) = last_modified {
                 builder = builder.last_modified(last_modified);

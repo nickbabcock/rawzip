@@ -548,12 +548,12 @@ fn process_archive_files<R: rawzip::ReaderAt>(
 
                         let mut data = Vec::new();
                         match entry.compression_method() {
-                            rawzip::CompressionMethod::Deflate => {
+                            rawzip::CompressionMethod::DEFLATE => {
                                 let inflater = flate2::read::DeflateDecoder::new(ent.reader());
                                 let mut verifier = ent.verifying_reader(inflater);
                                 std::io::copy(&mut verifier, &mut Cursor::new(&mut data)).unwrap();
                             }
-                            rawzip::CompressionMethod::Store => {
+                            rawzip::CompressionMethod::STORE => {
                                 let mut verifier = ent.verifying_reader(ent.reader());
                                 std::io::copy(&mut verifier, &mut Cursor::new(&mut data)).unwrap();
                             }
@@ -656,12 +656,12 @@ fn process_slice_archive_files(
 
                         let mut data = Vec::new();
                         match entry.compression_method() {
-                            rawzip::CompressionMethod::Deflate => {
+                            rawzip::CompressionMethod::DEFLATE => {
                                 let inflater = flate2::read::DeflateDecoder::new(ent.data());
                                 let mut verifier = ent.verifying_reader(inflater);
                                 std::io::copy(&mut verifier, &mut Cursor::new(&mut data)).unwrap();
                             }
-                            rawzip::CompressionMethod::Store => {
+                            rawzip::CompressionMethod::STORE => {
                                 let mut verifier = ent.verifying_reader(ent.data());
                                 std::io::copy(&mut verifier, &mut Cursor::new(&mut data)).unwrap();
                             }
@@ -967,7 +967,7 @@ fn test_read_what_we_write_slice(data: Vec<u8>) {
         entry.file_path().try_normalize().unwrap().as_ref(),
         "file.txt"
     );
-    assert_eq!(entry.compression_method(), rawzip::CompressionMethod::Store);
+    assert_eq!(entry.compression_method(), rawzip::CompressionMethod::STORE);
     assert_eq!(entry.uncompressed_size_hint(), data.len() as u64);
     assert_eq!(entry.compressed_size_hint(), data.len() as u64);
     let wayfinder = entry.wayfinder();
@@ -1200,7 +1200,7 @@ fn test_ff_optimized_jar() {
     let entry = archive.get_entry(wayfinder).unwrap();
     assert_eq!(
         first.compression_method(),
-        rawzip::CompressionMethod::Deflate
+        rawzip::CompressionMethod::DEFLATE
     );
     let reader = flate2::read::DeflateDecoder::new(entry.data());
     let mut reader = entry.verifying_reader(reader);
@@ -1225,7 +1225,7 @@ fn test_ff_optimized_jar_reader() {
     let entry = archive.get_entry(wayfinder).unwrap();
     assert_eq!(
         first.compression_method(),
-        rawzip::CompressionMethod::Deflate
+        rawzip::CompressionMethod::DEFLATE
     );
     let reader = flate2::read::DeflateDecoder::new(entry.reader());
     let mut reader = entry.verifying_reader(reader);
@@ -1241,12 +1241,11 @@ fn oversized_entry_needs_max_central_directory_buffer() {
     let name = "a".repeat(u16::MAX as usize);
     let comment = vec![b'c'; u16::MAX as usize];
     let extra = vec![0u8; u16::MAX as usize - 4];
-
     let mut output = Vec::new();
     let mut writer = ZipArchiveWriter::new(&mut output);
     let (entry, config) = writer
         .new_file(&name)
-        .compression_method(rawzip::CompressionMethod::Store)
+        .compression_method(rawzip::CompressionMethod::STORE)
         .extra_field(ExtraFieldId::new(0xcafe), &extra, rawzip::Header::CENTRAL)
         .unwrap()
         .comment(comment)

@@ -32,7 +32,7 @@ let mut archive = rawzip::ZipArchiveWriter::new(&mut output);
 
 // Start of a new file in our zip archive with deflate compression.
 let (mut entry, config) = archive.new_file("file.txt")
-    .compression_method(rawzip::CompressionMethod::Deflate)
+    .compression_method(rawzip::CompressionMethod::DEFLATE)
     .start()?;
 
 // Create the deflate compressor
@@ -70,7 +70,7 @@ let entry = entries.next_entry()?.unwrap();
 assert_eq!(entry.file_path().try_normalize()?.as_ref(), "file.txt");
 
 // Assert the compression method.
-assert_eq!(entry.compression_method(), rawzip::CompressionMethod::Deflate);
+assert_eq!(entry.compression_method(), rawzip::CompressionMethod::DEFLATE);
 
 // Assert the uncompressed size hint. Be warned that this may not be the actual,
 // uncompressed size for malicious or corrupted files.

@@ -130,7 +130,7 @@ pub fn create_test_zip(entry_count: usize) -> Vec<u8> {
     for file_name in file_names(entry_count) {
         let (mut entry, config) = archive
             .new_file(&file_name)
-            .compression_method(rawzip::CompressionMethod::Store)
+            .compression_method(rawzip::CompressionMethod::STORE)
             .start()
             .unwrap();
         let mut writer = config.wrap(&mut entry);

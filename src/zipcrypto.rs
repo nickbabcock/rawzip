@@ -188,7 +188,7 @@ const CHUNK: usize = 8 * 1024;
 ///
 /// let (mut entry, config) = archive
 ///     .new_file("test.txt")
-///     .compression_method(CompressionMethod::Deflate)
+///     .compression_method(CompressionMethod::DEFLATE)
 ///     .encrypted(true)
 ///     .start()?;
 ///

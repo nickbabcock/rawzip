@@ -30,9 +30,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     let compression_method = if use_zstd {
-        rawzip::CompressionMethod::Zstd
+        rawzip::CompressionMethod::ZSTD
     } else {
-        rawzip::CompressionMethod::Deflate
+        rawzip::CompressionMethod::DEFLATE
     };
 
     let output_path = positional_args[0];
@@ -95,7 +95,7 @@ fn add_file_to_archive<W: Write>(
     let mut file = fs::File::open(file_path)?;
     let (mut entry, config) = builder.start()?;
     match compression_method {
-        rawzip::CompressionMethod::Deflate => {
+        rawzip::CompressionMethod::DEFLATE => {
             let encoder =
                 flate2::write::DeflateEncoder::new(&mut entry, flate2::Compression::default());
             let mut writer = config.wrap(encoder);
@@ -104,7 +104,7 @@ fn add_file_to_archive<W: Write>(
             encoder.finish()?;
             entry.finish(output)?;
         }
-        rawzip::CompressionMethod::Zstd => {
+        rawzip::CompressionMethod::ZSTD => {
             let encoder = zstd::Encoder::new(&mut entry, 3)?;
             let mut writer = config.wrap(encoder);
             std::io::copy(&mut file, &mut writer)?;

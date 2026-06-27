@@ -62,14 +62,14 @@ fn fuzz_reader_zip_archive(data: &[u8], buf: &mut [u8]) -> Result<(), rawzip::Er
         };
         let _range = ent.compressed_data_range();
         match entry.compression_method() {
-            rawzip::CompressionMethod::Store => {
+            rawzip::CompressionMethod::STORE => {
                 let mut verifier = ent.verifying_reader(ent.reader());
                 let mut sink = std::io::sink();
                 let Ok(_) = std::io::copy(&mut verifier, &mut sink) else {
                     continue;
                 };
             }
-            rawzip::CompressionMethod::Deflate => {
+            rawzip::CompressionMethod::DEFLATE => {
                 let inflater = flate2::read::DeflateDecoder::new(ent.reader());
                 let mut verifier = ent.verifying_reader(inflater);
                 let mut sink = std::io::sink();
@@ -107,14 +107,14 @@ fn fuzz_slice_zip_archive(data: &[u8]) -> Result<(), rawzip::Error> {
         let _extra_fields = _local_header.extra_fields();
         let _range = ent.compressed_data_range();
         match entry.compression_method() {
-            rawzip::CompressionMethod::Store => {
+            rawzip::CompressionMethod::STORE => {
                 let mut verifier = ent.verifying_reader(ent.data());
                 let mut sink = std::io::sink();
                 let Ok(_) = std::io::copy(&mut verifier, &mut sink) else {
                     continue;
                 };
             }
-            rawzip::CompressionMethod::Deflate => {
+            rawzip::CompressionMethod::DEFLATE => {
                 let inflater = flate2::read::DeflateDecoder::new(ent.data());
                 let mut verifier = ent.verifying_reader(inflater);
                 let mut sink = std::io::sink();
