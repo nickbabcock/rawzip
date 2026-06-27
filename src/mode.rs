@@ -1,9 +1,13 @@
 /// ZIP creator system constants used in version_made_by field
-pub(crate) const CREATOR_UNIX: u16 = 3;
-pub(crate) const CREATOR_MACOS: u16 = 19;
-pub(crate) const CREATOR_NTFS: u16 = 11;
-pub(crate) const CREATOR_VFAT: u16 = 14;
-pub(crate) const CREATOR_FAT: u16 = 0;
+pub enum ZipCreatorSystem {}
+
+impl ZipCreatorSystem {
+    pub const CREATOR_UNIX: u16 = 3;
+    pub const CREATOR_MACOS: u16 = 19;
+    pub const CREATOR_NTFS: u16 = 11;
+    pub const CREATOR_VFAT: u16 = 14;
+    pub const CREATOR_FAT: u16 = 0;
+}
 
 /// File mode information for a given zip file entry.
 ///

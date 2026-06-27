@@ -3,10 +3,7 @@ use crate::Crc32;
 use crate::errors::{Error, ErrorKind};
 use crate::extra_fields::{ExtraFieldId, ExtraFields};
 use crate::headers::EntryFlags;
-use crate::mode::{
-    CREATOR_FAT, CREATOR_MACOS, CREATOR_NTFS, CREATOR_UNIX, CREATOR_VFAT, EntryMode,
-    msdos_mode_to_file_mode, unix_mode_to_file_mode,
-};
+use crate::mode::{EntryMode, ZipCreatorSystem, msdos_mode_to_file_mode, unix_mode_to_file_mode};
 use crate::path::{RawPath, ZipFilePath};
 #[cfg(feature = "std")]
 use crate::reader_at::{ReaderAt, ReaderAtExt};
@@ -1322,11 +1319,13 @@ println!("Safe path: {}", safe_path.as_ref());
 
         let mut mode = match creator_version {
             // Unix and macOS
-            CREATOR_UNIX | CREATOR_MACOS => unix_mode_to_file_mode(self.external_file_attrs >> 16),
-            // NTFS, VFAT, FAT
-            CREATOR_NTFS | CREATOR_VFAT | CREATOR_FAT => {
-                msdos_mode_to_file_mode(self.external_file_attrs)
+            ZipCreatorSystem::CREATOR_UNIX | ZipCreatorSystem::CREATOR_MACOS => {
+                unix_mode_to_file_mode(self.external_file_attrs >> 16)
             }
+            // NTFS, VFAT, FAT
+            ZipCreatorSystem::CREATOR_NTFS
+            | ZipCreatorSystem::CREATOR_VFAT
+            | ZipCreatorSystem::CREATOR_FAT => msdos_mode_to_file_mode(self.external_file_attrs),
             // default to basic permissions
             _ => 0o644,
         };
@@ -1337,6 +1336,26 @@ println!("Safe path: {}", safe_path.as_ref());
         }
 
         EntryMode::new(mode)
+    }
+
+    /// Return raw value for external file attrs.
+    ///
+    /// For general use use [`Self::mode`] function.
+    ///
+    /// Interpretation of this value is heavily dependent on correct interpretation of
+    ///   [`Self::version_made_by_raw`] value.
+    pub fn external_file_attrs_raw(&self) -> u32 {
+        self.external_file_attrs
+    }
+
+    /// Return raw value for version_made_by header field.
+    ///
+    /// For general use use [`Self::mode`] function.
+    ///
+    /// Interpretation [`Self::external_file_attrs_raw`] value is heavily dependent
+    ///   on correct interpretation of this field.
+    pub fn version_made_by_raw(&self) -> u16 {
+        self.version_made_by
     }
 
     /// The declared CRC32 checksum of the uncompressed data.
