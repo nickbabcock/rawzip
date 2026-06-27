@@ -1,3 +1,5 @@
+#![forbid(unsafe_code)]
+
 use quickcheck_macros::quickcheck;
 use rawzip::extra_fields::ExtraFieldId;
 use rawzip::time::{LocalDateTime, UtcDateTime, ZipDateTimeKind};
