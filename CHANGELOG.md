@@ -25,6 +25,7 @@ The reason is to prevent breaking changes in the future by properly modeling unk
     - 16: add Cmpsc (IBM z/OS CMPSC Compression)
     - 18: Lz77 -> Terse (IBM TERSE new)
     - 19: add Lz77 (IBM LZ77 z Architecture)
+- `CompressionMethod` is a newtype over `u16` instead of an enum
 - Remove `ReaderAt` type parameter on `ZipVerifier` 
 - `ZipReader::claim_verifier` borrows self and is infallible 
 - Remove accidentally exposed (and unused) `StackVecIter`
@@ -70,6 +71,7 @@ The reason is to prevent breaking changes in the future by properly modeling unk
 - Fix classic zip with 65536 entries failure to parse edge case
 - Fix failure to parse zip64 files that have a central directory size >= 4 GiB
 - Fix trailing slashes present in writer file entries in normalization
+- Update display and debug implementations for `CompressionMethod`
 
 ## v0.4.4 - March 9th, 2026
 
