@@ -1,8 +1,8 @@
 use crate::{
-    CENTRAL_HEADER_SIGNATURE, CompressionMethod, DataDescriptor,
+    CENTRAL_HEADER_SIGNATURE, CompressionMethod, Crc32, DataDescriptor,
     END_OF_CENTRAL_DIR_LOCATOR_SIGNATURE, END_OF_CENTRAL_DIR_SIGNATURE64,
     END_OF_CENTRAL_DIR_SIGNAUTRE_BYTES, EntryFlags, Error, Header, ZipFileHeaderFixed,
-    ZipLocalFileHeaderFixed, crc,
+    ZipLocalFileHeaderFixed,
     errors::ErrorKind,
     extra_fields::{ExtraFieldId, ExtraFieldsContainer},
     mode::CREATOR_UNIX,
@@ -1112,8 +1112,36 @@ where
 pub struct ZipDataWriter<W> {
     inner: W,
     uncompressed_bytes: u64,
-    crc: u32,
-    crc32_option: Crc32Option,
+    crc: ZipDataWriterCrc32,
+}
+
+#[derive(Debug, Clone)]
+enum ZipDataWriterCrc32 {
+    Calculate(Crc32),
+    Fixed(u32),
+}
+
+impl ZipDataWriterCrc32 {
+    fn new(option: Crc32Option) -> Self {
+        match option {
+            Crc32Option::Calculate => ZipDataWriterCrc32::Calculate(Crc32::new()),
+            Crc32Option::Custom(value) => ZipDataWriterCrc32::Fixed(value),
+            Crc32Option::Skip => ZipDataWriterCrc32::Fixed(0),
+        }
+    }
+
+    fn update(&mut self, data: &[u8]) {
+        if let ZipDataWriterCrc32::Calculate(crc) = self {
+            crc.update(data);
+        }
+    }
+
+    fn checksum(&self) -> u32 {
+        match self {
+            ZipDataWriterCrc32::Calculate(crc) => crc.checksum(),
+            ZipDataWriterCrc32::Fixed(value) => *value,
+        }
+    }
 }
 
 impl<W> ZipDataWriter<W> {
@@ -1127,12 +1155,10 @@ impl<W> ZipDataWriter<W> {
 
     /// Creates a new `ZipDataWriter` with a specific CRC32 calculation option.
     fn with_crc32_option(inner: W, crc32_option: Crc32Option) -> Self {
-        let crc = crc32_option.initial_value();
         ZipDataWriter {
             inner,
             uncompressed_bytes: 0,
-            crc,
-            crc32_option,
+            crc: ZipDataWriterCrc32::new(crc32_option),
         }
     }
 
@@ -1156,7 +1182,7 @@ impl<W> ZipDataWriter<W> {
     {
         self.flush()?;
         let output = DataDescriptorOutput {
-            crc: self.crc,
+            crc: self.crc.checksum(),
             compressed_size: 0,
             uncompressed_size: self.uncompressed_bytes,
         };
@@ -1172,11 +1198,7 @@ where
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
         let bytes_written = self.inner.write(buf)?;
         self.uncompressed_bytes += bytes_written as u64;
-
-        // Only calculate CRC32 if the option is Calculate
-        if matches!(self.crc32_option, Crc32Option::Calculate) {
-            self.crc = crc::crc32_chunk(&buf[..bytes_written], self.crc);
-        }
+        self.crc.update(&buf[..bytes_written]);
 
         Ok(bytes_written)
     }
