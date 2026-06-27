@@ -367,7 +367,7 @@ pub(super) fn find_end_of_central_dir<T>(
 where
     T: ReaderAt,
 {
-    if buffer.len() < END_OF_CENTRAL_DIR_SIGNAUTRE_BYTES.len() {
+    if buffer.len() < END_OF_CENTRAL_DIR_SIGNATURE_BYTES.len() {
         debug_assert!(false, "buffer not big enough to hold signature");
         return Ok(None);
     }
@@ -389,7 +389,7 @@ where
 
         reader.read_exact_at(haystack, chunk_start)?;
 
-        if let Some(i) = rfind::<END_OF_CENTRAL_DIR_SIGNAUTRE>(haystack) {
+        if let Some(i) = rfind::<END_OF_CENTRAL_DIR_SIGNATURE>(haystack) {
             return Ok(Some((chunk_start + i as u64, i, read_size)));
         }
 
@@ -399,7 +399,7 @@ where
 
         // Instead of worrying about copying data around in the buffer, just
         // re-read a few bytes again.
-        chunk_end = chunk_start + END_OF_CENTRAL_DIR_SIGNAUTRE_BYTES.len() as u64 - 1;
+        chunk_end = chunk_start + END_OF_CENTRAL_DIR_SIGNATURE_BYTES.len() as u64 - 1;
 
         // first iteration used a smaller window, so on future iterations let's
         // go larger.
@@ -475,12 +475,12 @@ mod tests {
                 "buffer_index should be within buffer_valid_len"
             );
             assert!(
-                buffer_pos + END_OF_CENTRAL_DIR_SIGNAUTRE_BYTES.len() <= buffer_valid_len,
+                buffer_pos + END_OF_CENTRAL_DIR_SIGNATURE_BYTES.len() <= buffer_valid_len,
                 "signature should be within valid part of buffer"
             );
             assert_eq!(
                 buffer[buffer_pos..buffer_pos + 4],
-                END_OF_CENTRAL_DIR_SIGNAUTRE_BYTES
+                END_OF_CENTRAL_DIR_SIGNATURE_BYTES
             );
         }
     }
@@ -492,8 +492,8 @@ mod tests {
         }
 
         let max_search_space = END_OF_CENTRAL_DIR_MAX_OFFSET;
-        let pos = (offset % data.len()).saturating_sub(END_OF_CENTRAL_DIR_SIGNAUTRE_BYTES.len());
-        data[pos..pos + 4].copy_from_slice(&END_OF_CENTRAL_DIR_SIGNAUTRE_BYTES);
+        let pos = (offset % data.len()).saturating_sub(END_OF_CENTRAL_DIR_SIGNATURE_BYTES.len());
+        data[pos..pos + 4].copy_from_slice(&END_OF_CENTRAL_DIR_SIGNATURE_BYTES);
 
         let result = find_end_of_central_dir_signature(&data, max_search_space as usize).unwrap();
 
@@ -515,12 +515,12 @@ mod tests {
             "buffer_index should be within buffer_valid_len"
         );
         assert!(
-            buffer_index + END_OF_CENTRAL_DIR_SIGNAUTRE_BYTES.len() <= buffer_valid_len,
+            buffer_index + END_OF_CENTRAL_DIR_SIGNATURE_BYTES.len() <= buffer_valid_len,
             "signature should be within valid part of buffer"
         );
         assert_eq!(
             buffer[buffer_index..buffer_index + 4],
-            END_OF_CENTRAL_DIR_SIGNAUTRE_BYTES
+            END_OF_CENTRAL_DIR_SIGNATURE_BYTES
         );
     }
 
@@ -553,7 +553,7 @@ mod tests {
                 "buffer_index should be within buffer_valid_len"
             );
             assert!(
-                buffer_index + END_OF_CENTRAL_DIR_SIGNAUTRE_BYTES.len() <= buffer_valid_len,
+                buffer_index + END_OF_CENTRAL_DIR_SIGNATURE_BYTES.len() <= buffer_valid_len,
                 "signature should be within valid part of buffer"
             );
         }
@@ -567,7 +567,7 @@ mod tests {
     fn test_find_end_of_central_dir_grows_initial_scan_window(#[case] bytes_before_window: usize) {
         let mut data = vec![0u8; INIT_SCAN_WINDOW * 4];
         let expected = data.len() - INIT_SCAN_WINDOW - bytes_before_window;
-        data[expected..expected + 4].copy_from_slice(&END_OF_CENTRAL_DIR_SIGNAUTRE_BYTES);
+        data[expected..expected + 4].copy_from_slice(&END_OF_CENTRAL_DIR_SIGNATURE_BYTES);
 
         let mut buffer = vec![0xa5; MAX_SCAN_WINDOW * 2];
         let (offset, buffer_pos, buffer_valid_len) = find_end_of_central_dir(
@@ -581,10 +581,10 @@ mod tests {
 
         assert_eq!(offset, expected as u64);
         assert!(buffer_valid_len <= MAX_SCAN_WINDOW);
-        assert!(buffer_pos + END_OF_CENTRAL_DIR_SIGNAUTRE_BYTES.len() <= buffer_valid_len);
+        assert!(buffer_pos + END_OF_CENTRAL_DIR_SIGNATURE_BYTES.len() <= buffer_valid_len);
         assert_eq!(
-            buffer[buffer_pos..buffer_pos + END_OF_CENTRAL_DIR_SIGNAUTRE_BYTES.len()],
-            END_OF_CENTRAL_DIR_SIGNAUTRE_BYTES
+            buffer[buffer_pos..buffer_pos + END_OF_CENTRAL_DIR_SIGNATURE_BYTES.len()],
+            END_OF_CENTRAL_DIR_SIGNATURE_BYTES
         );
         assert!(buffer[MAX_SCAN_WINDOW..].iter().all(|byte| *byte == 0xa5));
     }

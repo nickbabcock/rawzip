@@ -1,7 +1,7 @@
 use crate::{
     CENTRAL_HEADER_SIGNATURE, CompressionMethod, Crc32, DataDescriptor,
-    END_OF_CENTRAL_DIR_LOCATOR_SIGNATURE, END_OF_CENTRAL_DIR_SIGNATURE64,
-    END_OF_CENTRAL_DIR_SIGNAUTRE_BYTES, EntryFlags, Error, Header, ZipFileHeaderFixed,
+    END_OF_CENTRAL_DIR_LOCATOR_SIGNATURE, END_OF_CENTRAL_DIR_SIGNATURE_BYTES,
+    END_OF_CENTRAL_DIR_SIGNATURE64, EntryFlags, Error, Header, ZipFileHeaderFixed,
     ZipLocalFileHeaderFixed,
     errors::ErrorKind,
     extra_fields::{ExtraFieldId, ExtraFieldsContainer},
@@ -212,7 +212,7 @@ impl<W> ZipArchiveWriter<W> {
 
     /// Returns the current offset in the output stream.
     ///
-    /// Analagous to [`std::io::Cursor::position`].
+    /// Analogous to [`std::io::Cursor::position`].
     ///
     /// This can be used to determine various offsets during ZIP archive
     /// creation:
@@ -408,12 +408,12 @@ where
     ///
     /// for entry_result in archive.entries() {
     ///     let entry = entry_result?;
-    ///     
+    ///
     ///     // Find our custom field in the central directory
     ///     let custom_field_data = entry.extra_fields()
     ///         .find(|(id, _)| *id == my_custom_field)
     ///         .map(|(_, data)| data);
-    ///     
+    ///
     ///     match entry.file_path().as_ref() {
     ///         b"video.mp4" => {
     ///             // local only field should not be in central directory
@@ -945,7 +945,7 @@ where
         }
 
         // Write regular End of Central Directory Record
-        self.writer.write_all(&END_OF_CENTRAL_DIR_SIGNAUTRE_BYTES)?;
+        self.writer.write_all(&END_OF_CENTRAL_DIR_SIGNATURE_BYTES)?;
 
         // Disk numbers
         self.writer.write_all(&[0u8; 4])?;

@@ -16,7 +16,7 @@ in favor of associated constants:
 CompressionMethod::DEFLATE
 ```
 
-The reason is to prevent breaking changes in the future by properly modeling unknown compression methods that may be defined in future spec revisions. PR (#132)(https://github.com/nickbabcock/rawzip/pull/132) 
+The reason is to prevent breaking changes in the future by properly modeling unknown compression methods that may be defined in future spec revisions. PR (#132)(https://github.com/nickbabcock/rawzip/pull/132)
 
 ### Breaking Changes
 
@@ -26,8 +26,8 @@ The reason is to prevent breaking changes in the future by properly modeling unk
     - 18: Lz77 -> Terse (IBM TERSE new)
     - 19: add Lz77 (IBM LZ77 z Architecture)
 - `CompressionMethod` is a newtype over `u16` instead of an enum
-- Remove `ReaderAt` type parameter on `ZipVerifier` 
-- `ZipReader::claim_verifier` borrows self and is infallible 
+- Remove `ReaderAt` type parameter on `ZipVerifier`
+- `ZipReader::claim_verifier` borrows self and is infallible
 - Remove accidentally exposed (and unused) `StackVecIter`
 - Remove redundant getters on `ZipVerification`
 - Remove `ZipSliceArchive::as_bytes` as `get_ref` is strictly better
@@ -40,9 +40,9 @@ The reason is to prevent breaking changes in the future by properly modeling unk
 
 ### Performance
 
-- CRC calculation thoughput improvement of 10%
+- CRC calculation throughput improvement of 10%
 - Improve end of central directory (EOCD) detection by 2-8x with SWAR detection
-- Adopt adaptive window scanning for (EOCD) for Read implementations starting at 1 KiB for a 20x speedup 
+- Adopt adaptive window scanning for (EOCD) for Read implementations starting at 1 KiB for a 20x speedup
 
 ### Features and Changes
 
@@ -52,9 +52,9 @@ The reason is to prevent breaking changes in the future by properly modeling unk
 - Allow writing file names encoded as byte verbatim without requiring UTF-8 through `EntryPath` argument
 - Add ability to write archive and central directory comments
 - Add flags and DOS time accessors after local header is written
-- Add `MAX_CENTRAL_DIRECTORY_RECORD_SIZE` to size buffers according to pathologically large central directories 
+- Add `MAX_CENTRAL_DIRECTORY_RECORD_SIZE` to size buffers according to pathologically large central directories
 - Built-in CRC/size verification is now central-directory authoritative and never reads the trailing data descriptor to bring rawzip in line with other zip file libraries
-- Add functions for extracting zip entry data descriptors for those that want to cross validate values 
+- Add functions for extracting zip entry data descriptors for those that want to cross validate values
 - Add `ExtraFieldId::AES` and an integration test demonstrating how to read AES encrypted zip files
 - Add `ZipFileBuilder::encrypted` to set the encryption general purpose bit (caller is still responsible for actually doing the encryption).
 - Add `ZipSliceArchive::get_ref` and  `into_inner` to borrow or recover the underlying data
@@ -258,7 +258,7 @@ archive.new_file("file.txt")
     .create()?;
 ```
 
-The last breaking change is how the central directory iteration is terminated. Previously, iteration would terminate when an entry would fail to parse and the anticipated number of entries had been encountered. Now, iteration is terminated once the end of central directory marker is reached. 
+The last breaking change is how the central directory iteration is terminated. Previously, iteration would terminate when an entry would fail to parse and the anticipated number of entries had been encountered. Now, iteration is terminated once the end of central directory marker is reached.
 
 ## Additional changes
 
