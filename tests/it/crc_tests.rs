@@ -159,6 +159,26 @@ fn full_read_verifies_without_finish() {
     assert_invalid_checksum(err, corrupted, original);
 }
 
+#[test]
+fn reader_verifying_reader_custom_crc32() {
+    fn custom_crc32(buf: &[u8], initial: u32) -> u32 {
+        let mut h = crc32fast::Hasher::new_with_initial(initial);
+        h.update(buf);
+        h.finalize()
+    }
+
+    let data = build_deflate_zip(CONTENT);
+    let archive = ZipArchive::from_slice(&data).unwrap().into_reader();
+    let wayfinder = first_wayfinder(&archive);
+    let ent = archive.get_entry(wayfinder).unwrap();
+
+    let inflater = DeflateDecoder::new(ent.reader());
+    let mut verifier = ent.verifying_reader_crc32(inflater, custom_crc32);
+    let mut out = Vec::new();
+    io::copy(&mut verifier, &mut out).unwrap();
+    assert_eq!(out, CONTENT);
+}
+
 struct CustomCrcVerifier<R> {
     reader: flate2::CrcReader<DeflateDecoder<ZipReader<R>>>,
     size: u64,
