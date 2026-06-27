@@ -10,7 +10,7 @@ There'll always be a new deflate implementation or a new version release tomorro
 
 This is not a novel idea, go's archive/zip allows one to bring their own [decompressor too](https://pkg.go.dev/archive/zip#RegisterDecompressor), and optionally not decompress at all by opening the zip file entry in [raw mode](https://pkg.go.dev/archive/zip#File.OpenRaw).
 
-Other dependencies have been omitted as they have been reimplemented in code. Calculating the CRC of decompressed files is a good example. A performant implementation can be done in 50 lines of code; an implementation that slows synthethic benchmarks by only a few percentage points.
+Other dependencies have been omitted as they have been reimplemented in code. Calculating the CRC of decompressed files is a good example. A performant implementation can be done in 50 lines of code; an implementation that slows synthetic benchmarks by only a few percentage points.
 
 ## Efficiency
 

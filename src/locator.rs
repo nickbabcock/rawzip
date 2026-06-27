@@ -6,10 +6,10 @@ use crate::{
 };
 use core::num::NonZeroU64;
 
-const END_OF_CENTRAL_DIR_SIGNAUTRE: u32 = 0x06054b50;
+const END_OF_CENTRAL_DIR_SIGNATURE: u32 = 0x06054b50;
 #[cfg(any(feature = "std", test))]
-pub(crate) const END_OF_CENTRAL_DIR_SIGNAUTRE_BYTES: [u8; 4] =
-    END_OF_CENTRAL_DIR_SIGNAUTRE.to_le_bytes();
+pub(crate) const END_OF_CENTRAL_DIR_SIGNATURE_BYTES: [u8; 4] =
+    END_OF_CENTRAL_DIR_SIGNATURE.to_le_bytes();
 
 #[cfg(feature = "std")]
 mod reader;
@@ -331,9 +331,9 @@ impl EndOfCentralDirectoryRecordFixed {
             comment_len: le_u16(&data[20..22]),
         };
 
-        if result.signature != END_OF_CENTRAL_DIR_SIGNAUTRE {
+        if result.signature != END_OF_CENTRAL_DIR_SIGNATURE {
             return Err(Error::from(ErrorKind::InvalidSignature {
-                expected: END_OF_CENTRAL_DIR_SIGNAUTRE,
+                expected: END_OF_CENTRAL_DIR_SIGNATURE,
                 actual: result.signature,
             }));
         }
@@ -400,7 +400,7 @@ pub(crate) fn find_end_of_central_dir_signature(
     max_search_space: usize,
 ) -> Option<usize> {
     let start_search = data.len().saturating_sub(max_search_space);
-    rfind::<END_OF_CENTRAL_DIR_SIGNAUTRE>(&data[start_search..]).map(|pos| pos + start_search)
+    rfind::<END_OF_CENTRAL_DIR_SIGNATURE>(&data[start_search..]).map(|pos| pos + start_search)
 }
 
 /// Finds the last occurrence of the 4-byte little-endian `NEEDLE` in `haystack`.
@@ -481,15 +481,15 @@ mod tests {
     #[case(&[0x50, 0x4b, 0x05, 0x06, 0x50, 0x4b, 0x05, 0x06], Some(4))]
     #[case(&[0x50, 0x51, 0x4b, 0x05, 0x06, 0xff, 0xff, 0x07, 0x01, 0x50, 0x00], None)]
     fn test_rfind(#[case] input: &[u8], #[case] expected: Option<usize>) {
-        assert_eq!(rfind::<END_OF_CENTRAL_DIR_SIGNAUTRE>(input), expected);
+        assert_eq!(rfind::<END_OF_CENTRAL_DIR_SIGNATURE>(input), expected);
     }
 
     #[quickcheck]
     fn test_rfind_matches_windows_rposition(data: Vec<u8>) {
         let expected = data
-            .windows(END_OF_CENTRAL_DIR_SIGNAUTRE_BYTES.len())
-            .rposition(|window| window == END_OF_CENTRAL_DIR_SIGNAUTRE_BYTES);
+            .windows(END_OF_CENTRAL_DIR_SIGNATURE_BYTES.len())
+            .rposition(|window| window == END_OF_CENTRAL_DIR_SIGNATURE_BYTES);
 
-        assert_eq!(rfind::<END_OF_CENTRAL_DIR_SIGNAUTRE>(&data), expected);
+        assert_eq!(rfind::<END_OF_CENTRAL_DIR_SIGNATURE>(&data), expected);
     }
 }
