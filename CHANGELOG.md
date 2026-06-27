@@ -45,6 +45,7 @@ The reason is to prevent breaking changes in the future by properly modeling unk
 
 ### Features and Changes
 
+- Expose the slice reading APIs under "no std" and "no alloc" cargo feature flags
 - Add `EntryFlags` to expose the general purpose bit flags on file entries
 - Add `ZipFileHeaderRecord::comment` for zip entry central directory comment
 - Allow writing file names encoded as byte verbatim without requiring UTF-8 through `EntryPath` argument
