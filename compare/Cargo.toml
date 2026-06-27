@@ -3,15 +3,15 @@ name = "compare"
 edition = "2024"
 
 [dependencies]
-anyhow = "1.0.95"
-async_zip = { version = "0.0.17", features = ["tokio", "tokio-fs", "deflate"] }
-criterion = { version = "0.6", features = ["async_tokio", "csv_output"] }
+anyhow = "1.0.103"
+async_zip = { version = "0.0.18", features = ["tokio", "tokio-fs", "deflate"] }
+criterion = { version = "0.8", features = ["async_tokio", "csv_output"] }
 rawzip = { path = ".." }
-rc-zip = "5.3.1"
-rc-zip-sync = "4.3.0"
-tokio = { version = "1.43.0", features = ["rt", "rt-multi-thread"] }
-tokio-util = "0.7.13"
-zip = { version = "4.2.0" }
+rc-zip = "5.4.1"
+rc-zip-sync = "4.4.2"
+tokio = { version = "1.52", features = ["rt", "rt-multi-thread"] }
+tokio-util = "0.7.18"
+zip = { version = "8.6" }
 
 [[bench]]
 name = "bench"
