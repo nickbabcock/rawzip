@@ -77,7 +77,7 @@ impl<T: ReaderAt> ReaderAtExt for T {
         offset: u64,
     ) -> Result<usize, Error> {
         if buffer.len() < size {
-            return Err(Error::from(ErrorKind::BufferTooSmall));
+            return Err(Error::from(ErrorKind::BufferTooSmall { required: size }));
         }
 
         let read = self.try_read_at_least_at(buffer, size, offset)?;

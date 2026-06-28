@@ -815,7 +815,9 @@ fn errors_eq(a: &Error, b: &ErrorKind) -> bool {
         (ErrorKind::IO(a), ErrorKind::IO(b)) => a.kind() == b.kind(),
         (ErrorKind::Eof, ErrorKind::Eof) => true,
         (ErrorKind::MissingEndOfCentralDirectory, ErrorKind::MissingEndOfCentralDirectory) => true,
-        (ErrorKind::BufferTooSmall, ErrorKind::BufferTooSmall) => true,
+        (ErrorKind::BufferTooSmall { required: a }, ErrorKind::BufferTooSmall { required: b }) => {
+            a == b
+        }
         _ => false,
     }
 }
@@ -1243,6 +1245,7 @@ fn oversized_entry_needs_max_central_directory_buffer() {
     let name = "a".repeat(u16::MAX as usize);
     let comment = vec![b'c'; u16::MAX as usize];
     let extra = vec![0u8; u16::MAX as usize - 4];
+    let expected_required = name.len() + 4 + extra.len() + comment.len();
     let mut output = Vec::new();
     let mut writer = ZipArchiveWriter::new(&mut output);
     let (entry, config) = writer
@@ -1264,7 +1267,13 @@ fn oversized_entry_needs_max_central_directory_buffer() {
         .unwrap();
     let mut entries = archive.entries(&mut small);
     let err = entries.next_entry().unwrap_err();
-    assert!(matches!(err.kind(), rawzip::ErrorKind::BufferTooSmall));
+    assert!(matches!(
+        err.kind(),
+        rawzip::ErrorKind::BufferTooSmall {
+            required: required_variable_len
+        }
+        if *required_variable_len == expected_required
+    ));
 
     // A buffer sized to MAX_CENTRAL_DIRECTORY_RECORD_SIZE parses it.
     let mut large = vec![0u8; rawzip::MAX_CENTRAL_DIRECTORY_RECORD_SIZE];
@@ -1281,4 +1290,39 @@ fn oversized_entry_needs_max_central_directory_buffer() {
     let mut slice_entries = slice_archive.entries();
     let slice_entry = slice_entries.next_entry().unwrap().expect("entry present");
     assert_eq!(slice_entry.file_path().as_bytes().len(), u16::MAX as usize);
+}
+
+#[test]
+fn entry_overrunning_central_directory_is_eof() {
+    let mut output = Vec::new();
+    let mut writer = ZipArchiveWriter::new(&mut output);
+    let (entry, config) = writer
+        .new_file("hello.txt")
+        .compression_method(rawzip::CompressionMethod::STORE)
+        .start()
+        .unwrap();
+    let (entry, descriptor) = config.wrap(entry).finish().unwrap();
+    entry.finish(descriptor).unwrap();
+    writer.finish().unwrap();
+
+    // A buffer large enough to hold the (bogus) record rules out BufferTooSmall,
+    // so only the overrun can be at fault.
+    let mut buf = vec![0u8; rawzip::MAX_CENTRAL_DIRECTORY_RECORD_SIZE];
+    let cd_offset = rawzip::ZipLocator::new()
+        .locate_in_reader(output.as_slice(), &mut buf, output.len() as u64)
+        .unwrap()
+        .directory_offset() as usize;
+
+    // Inflate the entry's file name length (28 bytes into the central directory
+    // header) so its variable section claims far more bytes than the central
+    // directory actually holds.
+    let name_len_pos = cd_offset + 28;
+    output[name_len_pos..name_len_pos + 2].copy_from_slice(&u16::MAX.to_le_bytes());
+
+    let archive = rawzip::ZipLocator::new()
+        .locate_in_reader(output.as_slice(), &mut buf, output.len() as u64)
+        .unwrap();
+    let mut entries = archive.entries(&mut buf);
+    let err = entries.next_entry().unwrap_err();
+    assert!(matches!(err.kind(), rawzip::ErrorKind::Eof));
 }

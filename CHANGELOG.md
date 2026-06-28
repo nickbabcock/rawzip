@@ -37,6 +37,7 @@ The reason is to prevent breaking changes in the future by properly modeling unk
 - Relocate `ZipSliceEntry::{file_path,extra_fields}` behind lifetime accurate `ZipSliceEntry::local_header`
 - Seal `TimeZoneMarker` trait
 - Remove deprecated `ZipFileBuilder::create`
+- Change `ErrorKind::BufferTooSmall` to carry the required buffer capacity
 
 ### Performance
 
