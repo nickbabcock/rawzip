@@ -8,6 +8,7 @@ use std::fs::File;
 use std::io::{Cursor, Read, Seek, SeekFrom};
 use std::path::Path;
 
+mod concurrent_tests;
 mod crc_tests;
 mod encryption_tests;
 mod entry_path_tests;
