@@ -1,4 +1,4 @@
-use rawzip::{time::UtcDateTime, ReaderAt, ZipArchive, ZipArchiveWriter, ZipSliceArchive};
+use rawzip::{ReaderAt, ZipArchive, ZipArchiveWriter, ZipSliceArchive, time::UtcDateTime};
 use std::io::{Cursor, Write};
 
 pub(crate) const SIZE_CASES: [usize; 9] = [1, 4, 16, 64, 256, 1024, 4096, 16384, 65536];
@@ -119,6 +119,48 @@ pub fn sum_reader_entries<R: ReaderAt>(archive: &ZipArchive<R>, buffer: &mut [u8
         total_size += entry.uncompressed_size_hint();
     }
     total_size
+}
+
+pub fn extract_first_slice<T: AsRef<[u8]>>(archive: &ZipSliceArchive<T>) -> u64 {
+    let mut entries = archive.entries();
+    let entry = entries.next_entry().unwrap().unwrap();
+    let zip_entry = archive.get_entry(entry.wayfinder()).unwrap();
+    zip_entry.data().len() as u64
+}
+
+/// Extract every entry through the slice API, parsing each local file header.
+pub fn extract_all_slice<T: AsRef<[u8]>>(archive: &ZipSliceArchive<T>) -> u64 {
+    let mut bytes = 0u64;
+    let mut entries = archive.entries();
+    while let Ok(Some(entry)) = entries.next_entry() {
+        let zip_entry = archive.get_entry(entry.wayfinder()).unwrap();
+        bytes += zip_entry.data().len() as u64;
+    }
+    bytes
+}
+
+/// Extract the first entry through the reader API: parse its local file header
+/// and stream the stored bytes through a CRC-verifying reader.
+pub fn extract_first_reader<R: ReaderAt>(archive: &ZipArchive<R>, buffer: &mut [u8]) -> u64 {
+    let mut entries = archive.entries(buffer);
+    let entry = entries.next_entry().unwrap().unwrap();
+    let zip_entry = archive.get_entry(entry.wayfinder()).unwrap();
+    let reader = zip_entry.reader();
+    let mut verifier = zip_entry.verifying_reader(reader);
+    std::io::copy(&mut verifier, &mut std::io::sink()).unwrap()
+}
+
+/// Extract every entry through the reader API, parsing and verifying each one.
+pub fn extract_all_reader<R: ReaderAt>(archive: &ZipArchive<R>, buffer: &mut [u8]) -> u64 {
+    let mut bytes = 0u64;
+    let mut entries = archive.entries(buffer);
+    while let Ok(Some(entry)) = entries.next_entry() {
+        let zip_entry = archive.get_entry(entry.wayfinder()).unwrap();
+        let reader = zip_entry.reader();
+        let mut verifier = zip_entry.verifying_reader(reader);
+        bytes += std::io::copy(&mut verifier, &mut std::io::sink()).unwrap();
+    }
+    bytes
 }
 
 pub fn create_test_zip(entry_count: usize) -> Vec<u8> {

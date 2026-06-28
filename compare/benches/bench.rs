@@ -1,6 +1,13 @@
-use criterion::{criterion_group, criterion_main, Criterion};
+use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use rawzip::extra_fields::ExtraFieldId;
+use std::hint::black_box;
 use std::io::{Cursor, Write};
+
+/// Number of entries in the archive walked by the read benchmarks.
+const READ_ENTRIES: usize = 100_000;
+
+/// Number of entries written by the write benchmarks.
+const WRITE_ENTRIES: usize = 5_000;
 
 fn create_test_zip<const TIMESTAMP: bool>(entries: usize) -> Vec<u8> {
     let jan_1_2001 = rawzip::time::UtcDateTime::from_components(2001, 1, 1, 0, 0, 0, 0).unwrap();
@@ -28,90 +35,213 @@ fn create_test_zip<const TIMESTAMP: bool>(entries: usize) -> Vec<u8> {
     output.into_inner()
 }
 
-fn parse_benchmarks(c: &mut Criterion) {
-    let mut group = c.benchmark_group("parse");
-    let zip_data = create_test_zip::<true>(100_000);
-    let setup_zip = rawzip::ZipArchive::from_slice(&zip_data).unwrap();
-    let throughput = zip_data.len() as u64 - setup_zip.directory_offset();
-    group.throughput(criterion::Throughput::Bytes(throughput));
+// Use case: compute an archive's overall compression ratio.
+fn compression_ratio_benchmarks(c: &mut Criterion) {
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    let mut group = c.benchmark_group("compression_ratio");
 
-    group.bench_function("rawzip", |b| {
-        #[inline(never)]
-        fn rawzip_bench(zip_data: &[u8]) {
-            let archive = rawzip::ZipArchive::from_slice(&zip_data).unwrap();
-            let mut total_size = 0u64;
-            let mut entries = archive.entries();
-            while let Ok(Some(entry)) = entries.next_entry() {
-                total_size += entry.uncompressed_size_hint();
-            }
-            assert_eq!(total_size, 100_000);
-        }
+    let zip_data = create_test_zip::<true>(READ_ENTRIES);
+    // These are per-entry workloads, so throughput is reported in entries/sec.
+    group.throughput(Throughput::Elements(READ_ENTRIES as u64));
 
+    // rawzip slice API: bytes already in memory, so the central directory is
+    // walked zero-copy with no allocations.
+    group.bench_function("rawzip_slice", |b| {
         b.iter(|| {
-            rawzip_bench(&zip_data);
-        });
+            let archive = rawzip::ZipArchive::from_slice(&zip_data).unwrap();
+            let (mut compressed, mut uncompressed) = (0u64, 0u64);
+            let mut entries = archive.entries();
+            while let Some(entry) = entries.next_entry().unwrap() {
+                compressed += entry.compressed_size_hint();
+                uncompressed += entry.uncompressed_size_hint();
+            }
+            black_box((compressed, uncompressed))
+        })
     });
 
-    group.bench_function("rc_zip", |b| {
+    // rawzip reader API: streamed through one reused scratch buffer, backed by
+    // an in-memory slice to keep the measurement free of disk/page-cache noise.
+    group.bench_function("rawzip_reader", |b| {
+        let mut buffer = vec![0u8; rawzip::RECOMMENDED_BUFFER_SIZE];
         b.iter(|| {
-            use rc_zip_sync::ReadZip;
-
-            let slice = &zip_data[..];
-            let reader = slice.read_zip().unwrap();
-            let total_size = reader.entries().map(|x| x.uncompressed_size).sum::<u64>();
-            assert_eq!(total_size, 100_000);
+            let archive = rawzip::ZipLocator::new()
+                .locate_in_reader(zip_data.as_slice(), &mut buffer, zip_data.len() as u64)
+                .unwrap();
+            let (mut compressed, mut uncompressed) = (0u64, 0u64);
+            let mut entries = archive.entries(&mut buffer);
+            while let Some(entry) = entries.next_entry().unwrap() {
+                compressed += entry.compressed_size_hint();
+                uncompressed += entry.uncompressed_size_hint();
+            }
+            black_box((compressed, uncompressed))
         })
     });
 
     group.bench_function("zip", |b| {
         b.iter(|| {
-            use zip::ZipArchive;
-
             let cursor = Cursor::new(&zip_data);
-            let mut archive = ZipArchive::new(cursor).unwrap();
-            let entries = archive.len();
-            let mut total_size = 0u64;
-            for ind in 0..entries {
-                let entry = archive.by_index_raw(ind).unwrap();
-                total_size += entry.size();
+            let mut archive = zip::ZipArchive::new(cursor).unwrap();
+            let (mut compressed, mut uncompressed) = (0u64, 0u64);
+            for i in 0..archive.len() {
+                let entry = archive.by_index_raw(i).unwrap();
+                compressed += entry.compressed_size();
+                uncompressed += entry.size();
             }
-            assert_eq!(total_size, 100_000);
+            black_box((compressed, uncompressed))
+        })
+    });
+
+    group.bench_function("rc_zip", |b| {
+        b.iter(|| {
+            use rc_zip_sync::ReadZip;
+            let slice = zip_data.as_slice();
+            let reader = slice.read_zip().unwrap();
+            let totals = reader.entries().fold((0u64, 0u64), |(c, u), entry| {
+                (c + entry.compressed_size, u + entry.uncompressed_size)
+            });
+            black_box(totals)
         })
     });
 
     group.bench_function("async_zip", |b| {
-        b.to_async(tokio::runtime::Runtime::new().unwrap())
-            .iter(|| async {
-                use async_zip::base::read::seek::ZipFileReader;
-                use tokio_util::compat::TokioAsyncReadCompatExt;
+        b.to_async(&rt).iter(|| async {
+            use async_zip::base::read::seek::ZipFileReader;
+            use tokio_util::compat::TokioAsyncReadCompatExt;
 
-                let cursor = Cursor::new(&zip_data);
-                let reader = ZipFileReader::new(cursor.compat()).await.unwrap();
-                let sum = reader
-                    .file()
-                    .entries()
-                    .iter()
-                    .map(|x| x.uncompressed_size())
-                    .sum::<u64>();
-                assert_eq!(sum, 100_000);
-            })
+            let cursor = Cursor::new(&zip_data);
+            let reader = ZipFileReader::new(cursor.compat()).await.unwrap();
+            let totals = reader
+                .file()
+                .entries()
+                .iter()
+                .fold((0u64, 0u64), |(c, u), entry| {
+                    (c + entry.compressed_size(), u + entry.uncompressed_size())
+                });
+            black_box(totals)
+        })
     });
 
     group.finish();
 }
 
+// Use case: extract entries from a large archive (0-byte store entries)
+fn extract_benchmarks(c: &mut Criterion) {
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    let mut group = c.benchmark_group("extract");
+
+    let zip_data = create_test_zip::<true>(READ_ENTRIES);
+
+    group.throughput(Throughput::Elements(1));
+    for (label, take_all) in [("first", false), ("all", true)] {
+        group.bench_function(BenchmarkId::new("rawzip_slice", label), |b| {
+            b.iter(|| {
+                let archive = rawzip::ZipArchive::from_slice(&zip_data).unwrap();
+                let mut bytes = 0u64;
+                let mut entries = archive.entries();
+                while let Some(entry) = entries.next_entry().unwrap() {
+                    let zip_entry = archive.get_entry(entry.wayfinder()).unwrap();
+                    bytes += zip_entry.data().len() as u64;
+                    if !take_all {
+                        break;
+                    }
+                }
+                black_box(bytes)
+            })
+        });
+
+        group.bench_function(BenchmarkId::new("rawzip_reader", label), |b| {
+            let mut buffer = vec![0u8; rawzip::RECOMMENDED_BUFFER_SIZE];
+            b.iter(|| {
+                let archive = rawzip::ZipLocator::new()
+                    .locate_in_reader(zip_data.as_slice(), &mut buffer, zip_data.len() as u64)
+                    .unwrap();
+                let mut bytes = 0u64;
+                let mut entries = archive.entries(&mut buffer);
+                while let Some(entry) = entries.next_entry().unwrap() {
+                    let zip_entry = archive.get_entry(entry.wayfinder()).unwrap();
+                    let reader = zip_entry.reader();
+                    let mut verifier = zip_entry.verifying_reader(reader);
+                    bytes += std::io::copy(&mut verifier, &mut std::io::sink()).unwrap();
+                    if !take_all {
+                        break;
+                    }
+                }
+                black_box(bytes)
+            })
+        });
+
+        // zip: eager open builds the whole index, then each entry is extracted
+        // by position.
+        group.bench_function(BenchmarkId::new("zip", label), |b| {
+            b.iter(|| {
+                let cursor = Cursor::new(&zip_data);
+                let mut archive = zip::ZipArchive::new(cursor).unwrap();
+                let n = if take_all { archive.len() } else { 1 };
+                let mut bytes = 0u64;
+                for i in 0..n {
+                    let mut file = archive.by_index(i).unwrap();
+                    bytes += std::io::copy(&mut file, &mut std::io::sink()).unwrap();
+                }
+                black_box(bytes)
+            })
+        });
+
+        // rc_zip: eager open, then each entry is read from the parsed list.
+        group.bench_function(BenchmarkId::new("rc_zip", label), |b| {
+            b.iter(|| {
+                use rc_zip_sync::ReadZip;
+                let slice = zip_data.as_slice();
+                let reader = slice.read_zip().unwrap();
+                let n = if take_all { usize::MAX } else { 1 };
+                let mut bytes = 0u64;
+                for handle in reader.entries().take(n) {
+                    bytes += handle.bytes().unwrap().len() as u64;
+                }
+                black_box(bytes)
+            })
+        });
+
+        // async_zip: eager open, then each entry is read by index.
+        group.bench_function(BenchmarkId::new("async_zip", label), |b| {
+            b.to_async(&rt).iter(|| async {
+                use async_zip::base::read::seek::ZipFileReader;
+                use tokio_util::compat::TokioAsyncReadCompatExt;
+
+                let cursor = Cursor::new(&zip_data);
+                let mut reader = ZipFileReader::new(cursor.compat()).await.unwrap();
+                let n = if take_all {
+                    reader.file().entries().len()
+                } else {
+                    1
+                };
+                let mut bytes = 0u64;
+                let mut buf = Vec::new();
+                for i in 0..n {
+                    buf.clear();
+                    let mut entry_reader = reader.reader_with_entry(i).await.unwrap();
+                    entry_reader.read_to_end_checked(&mut buf).await.unwrap();
+                    bytes += buf.len() as u64;
+                }
+                black_box(bytes)
+            })
+        });
+    }
+
+    group.finish();
+}
+
+// Use case: package N files into an archive.
 fn write_benchmarks(c: &mut Criterion) {
+    let rt = tokio::runtime::Runtime::new().unwrap();
     let mut group = c.benchmark_group("write");
 
-    // Calculate throughput for the with-extra-fields case (larger due to extra data)
-    let zip_with_extra_fields = create_test_zip::<true>(5000);
-    group.throughput(criterion::Throughput::Bytes(
-        zip_with_extra_fields.len() as u64
-    ));
+    // Extra fields (timestamps). Throughput is keyed to the archive size this
+    // variant produces.
+    let extra_fields_bytes = create_test_zip::<true>(WRITE_ENTRIES).len() as u64;
+    group.throughput(Throughput::Bytes(extra_fields_bytes));
 
-    // Benchmarks with extra fields (timestamps)
     group.bench_function("extra_fields/rawzip", |b| {
-        b.iter(|| create_test_zip::<true>(5000));
+        b.iter(|| create_test_zip::<true>(WRITE_ENTRIES));
     });
 
     group.bench_function("extra_fields/zip", |b| {
@@ -119,9 +249,8 @@ fn write_benchmarks(c: &mut Criterion) {
             let mut output = Cursor::new(Vec::new());
             let mut archive = zip::ZipWriter::new(&mut output);
 
-            // It doesn't look like the rust zip implementation writes out
-            // the extended timestamp field so we manually do it to make it
-            // a more apples to apples comparison.
+            // The zip crate does not emit the extended timestamp field, so add
+            // it manually to keep the comparison apples-to-apples.
             let jan_1_2001 =
                 rawzip::time::UtcDateTime::from_components(2001, 1, 1, 0, 0, 0, 0).unwrap();
             let mut data = [0u8; 5];
@@ -133,14 +262,10 @@ fn write_benchmarks(c: &mut Criterion) {
                 zip::write::FileOptions::default()
                     .compression_method(zip::CompressionMethod::Stored);
             options
-                .add_extra_data(
-                    ExtraFieldId::EXTENDED_TIMESTAMP.as_u16(),
-                    Box::new(data),
-                    true,
-                )
+                .add_extra_data(ExtraFieldId::EXTENDED_TIMESTAMP.as_u16(), data, true)
                 .unwrap();
 
-            for i in 0..5000 {
+            for i in 0..WRITE_ENTRIES {
                 archive
                     .start_file(names.name_of(i), options.clone())
                     .unwrap();
@@ -152,9 +277,12 @@ fn write_benchmarks(c: &mut Criterion) {
         });
     });
 
-    // Benchmarks without extra fields (no timestamps)
+    // No extra fields. Throughput is keyed to the smaller minimal archive size.
+    let minimal_bytes = create_test_zip::<false>(WRITE_ENTRIES).len() as u64;
+    group.throughput(Throughput::Bytes(minimal_bytes));
+
     group.bench_function("minimal/rawzip", |b| {
-        b.iter(|| create_test_zip::<false>(5000));
+        b.iter(|| create_test_zip::<false>(WRITE_ENTRIES));
     });
 
     group.bench_function("minimal/zip", |b| {
@@ -167,7 +295,7 @@ fn write_benchmarks(c: &mut Criterion) {
 
             let mut names = NameIter::new();
 
-            for i in 0..5000 {
+            for i in 0..WRITE_ENTRIES {
                 archive.start_file(names.name_of(i), options).unwrap();
                 archive.write_all(b"x").unwrap();
             }
@@ -178,27 +306,24 @@ fn write_benchmarks(c: &mut Criterion) {
     });
 
     group.bench_function("minimal/async_zip", |b| {
-        b.to_async(tokio::runtime::Runtime::new().unwrap())
-            .iter(|| async {
-                use async_zip::base::write::ZipFileWriter;
-                use async_zip::ZipEntryBuilder;
+        b.to_async(&rt).iter(|| async {
+            use async_zip::ZipEntryBuilder;
+            use async_zip::base::write::ZipFileWriter;
 
-                let mut output = Cursor::new(Vec::new());
-                let mut archive = ZipFileWriter::with_tokio(&mut output);
+            let mut output = Cursor::new(Vec::new());
+            let mut archive = ZipFileWriter::with_tokio(&mut output);
 
-                let mut names = NameIter::new();
+            let mut names = NameIter::new();
 
-                for i in 0..5000 {
-                    let entry = ZipEntryBuilder::new(
-                        names.name_of(i).into(),
-                        async_zip::Compression::Stored,
-                    );
-                    archive.write_entry_whole(entry, b"x").await.unwrap();
-                }
+            for i in 0..WRITE_ENTRIES {
+                let entry =
+                    ZipEntryBuilder::new(names.name_of(i).into(), async_zip::Compression::Stored);
+                archive.write_entry_whole(entry, b"x").await.unwrap();
+            }
 
-                archive.close().await.unwrap();
-                output.into_inner()
-            });
+            archive.close().await.unwrap();
+            output.into_inner()
+        });
     });
 
     group.finish();
@@ -228,5 +353,10 @@ impl NameIter {
     }
 }
 
-criterion_group!(benches, parse_benchmarks, write_benchmarks);
+criterion_group!(
+    benches,
+    compression_ratio_benchmarks,
+    extract_benchmarks,
+    write_benchmarks
+);
 criterion_main!(benches);

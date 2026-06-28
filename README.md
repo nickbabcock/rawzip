@@ -117,7 +117,9 @@ What consumers must handle:
 
 ## Benchmarks
 
-![Chart depicting rawzip performance of parsing through the central directory compared to other Rust zip implementations (view image on github if reading on docs.rs)](assets/rawzip-performance-comparison.png)
+![Chart depicting rawzip performance of scanning central directory metadata compared to other Rust zip implementations (view image on github if reading on docs.rs)](assets/rawzip-compression-ratio-comparison.png)
+
+![Chart depicting rawzip performance of extracting files from a 100,000-entry archive compared to other Rust zip implementations (view image on github if reading on docs.rs)](assets/rawzip-extract-comparison.png)
 
 ![Chart depicting rawzip performance of writing a Zip file (view image on github if reading on docs.rs)](assets/rawzip-write-performance-comparison.png)
 

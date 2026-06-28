@@ -1,6 +1,7 @@
 pub mod criterion_benches {
     use crate::shared::{
-        create_test_zip, deterministic_random_bytes, filled_bytes, near_miss_bytes,
+        create_test_zip, deterministic_random_bytes, extract_all_reader, extract_all_slice,
+        extract_first_reader, extract_first_slice, filled_bytes, near_miss_bytes,
         setup_reader_fixture, sum_slice_entries, LARGE_ENTRY_COUNT, SIZE_CASES,
     };
     use criterion::{BenchmarkId, Criterion, Throughput};
@@ -17,6 +18,22 @@ pub mod criterion_benches {
             total_size += entry.uncompressed_size_hint();
         }
         total_size
+    }
+
+    fn locate_reader_and_extract(
+        data: &[u8],
+        buffer: &mut [u8],
+        end_offset: u64,
+        take_all: bool,
+    ) -> u64 {
+        let archive = ZipLocator::new()
+            .locate_in_reader(data, buffer, end_offset)
+            .unwrap();
+        if take_all {
+            extract_all_reader(&archive, buffer)
+        } else {
+            extract_first_reader(&archive, buffer)
+        }
     }
 
     fn locator(c: &mut Criterion) {
@@ -106,8 +123,47 @@ pub mod criterion_benches {
         group.finish();
     }
 
+    fn extract(c: &mut Criterion) {
+        let zip_data = create_test_zip(LARGE_ENTRY_COUNT);
+        let mut reader_fixture = setup_reader_fixture(LARGE_ENTRY_COUNT);
+        let mut group = c.benchmark_group("extract");
+
+        // One archive processed per iteration (extracting the first entry, or
+        // all of them), so throughput is reported per archive.
+        group.throughput(Throughput::Elements(1));
+
+        for (label, take_all) in [("first", false), ("all", true)] {
+            group.bench_function(BenchmarkId::new("slice", label), |b| {
+                b.iter(|| {
+                    let archive = rawzip::ZipArchive::from_slice(&zip_data).unwrap();
+                    let bytes = if take_all {
+                        extract_all_slice(&archive)
+                    } else {
+                        extract_first_slice(&archive)
+                    };
+                    black_box(bytes)
+                })
+            });
+
+            group.bench_function(BenchmarkId::new("reader", label), |b| {
+                b.iter(|| {
+                    let bytes = locate_reader_and_extract(
+                        &reader_fixture.zip_data,
+                        &mut reader_fixture.buffer,
+                        reader_fixture.end_offset,
+                        take_all,
+                    );
+                    black_box(bytes)
+                })
+            });
+        }
+
+        group.finish();
+    }
+
     criterion::criterion_group!(locator_benches, locator, locator_valid);
     criterion::criterion_group!(entries_benches, entries);
+    criterion::criterion_group!(extract_benches, extract);
 }
 
 #[cfg(not(target_family = "wasm"))]
@@ -151,6 +207,26 @@ pub mod gungraun_benches {
     #[inline(never)]
     fn measure_reader_entries(fixture: &mut ReaderEntriesFixture) -> u64 {
         crate::shared::sum_reader_entries(&fixture.archive, &mut fixture.buffer)
+    }
+
+    #[inline(never)]
+    fn measure_extract_first_slice(fixture: &SliceEntriesFixture) -> u64 {
+        crate::shared::extract_first_slice(&fixture.archive)
+    }
+
+    #[inline(never)]
+    fn measure_extract_all_slice(fixture: &SliceEntriesFixture) -> u64 {
+        crate::shared::extract_all_slice(&fixture.archive)
+    }
+
+    #[inline(never)]
+    fn measure_extract_first_reader(fixture: &mut ReaderEntriesFixture) -> u64 {
+        crate::shared::extract_first_reader(&fixture.archive, &mut fixture.buffer)
+    }
+
+    #[inline(never)]
+    fn measure_extract_all_reader(fixture: &mut ReaderEntriesFixture) -> u64 {
+        crate::shared::extract_all_reader(&fixture.archive, &mut fixture.buffer)
     }
 
     #[library_benchmark]
@@ -205,6 +281,34 @@ pub mod gungraun_benches {
         black_box(total_size)
     }
 
+    #[library_benchmark]
+    #[bench::large_directory(args = (200_000usize), setup = setup_slice_entries_fixture)]
+    fn extract_first_slice(fixture: SliceEntriesFixture) -> u64 {
+        black_box(measure_extract_first_slice(&fixture))
+    }
+
+    #[library_benchmark]
+    #[bench::large_directory(args = (200_000usize), setup = setup_slice_entries_fixture)]
+    fn extract_all_slice(fixture: SliceEntriesFixture) -> u64 {
+        let bytes = measure_extract_all_slice(&fixture);
+        assert_eq!(bytes, fixture.expected_total_size);
+        black_box(bytes)
+    }
+
+    #[library_benchmark]
+    #[bench::large_directory(args = (200_000usize), setup = setup_reader_entries_fixture)]
+    fn extract_first_reader(mut fixture: ReaderEntriesFixture) -> u64 {
+        black_box(measure_extract_first_reader(&mut fixture))
+    }
+
+    #[library_benchmark]
+    #[bench::large_directory(args = (200_000usize), setup = setup_reader_entries_fixture)]
+    fn extract_all_reader(mut fixture: ReaderEntriesFixture) -> u64 {
+        let bytes = measure_extract_all_reader(&mut fixture);
+        assert_eq!(bytes, fixture.expected_total_size);
+        black_box(bytes)
+    }
+
     library_benchmark_group!(
         name = locator_benches,
         benchmarks = [
@@ -220,5 +324,15 @@ pub mod gungraun_benches {
     library_benchmark_group!(
         name = entries_benches,
         benchmarks = [iterate_slice_entries, iterate_reader_entries]
+    );
+
+    library_benchmark_group!(
+        name = extract_benches,
+        benchmarks = [
+            extract_first_slice,
+            extract_all_slice,
+            extract_first_reader,
+            extract_all_reader
+        ]
     );
 }
