@@ -19,6 +19,7 @@ const ZIP64_EOCD_SIZE: usize = 56;
 const FLAG_ENCRYPTED: u16 = 0x01; // bit 0: file is encrypted
 const FLAG_DATA_DESCRIPTOR: u16 = 0x08; // bit 3: data descriptor present
 const FLAG_UTF8_ENCODING: u16 = 0x800; // bit 11: UTF-8 encoding flag (EFS)
+const MSDOS_DIRECTORY_ATTRIBUTE: u32 = 0x10;
 
 // ZIP64 thresholds - when to switch to ZIP64 format
 const ZIP64_THRESHOLD_FILE_SIZE: u64 = u32::MAX as u64;
@@ -745,6 +746,7 @@ where
             modification_time: options.modification_time,
             unix_permissions: options.unix_permissions,
             extra_fields: options.extra_fields,
+            is_dir: true,
         };
         self.files.push(file_header);
 
@@ -868,6 +870,13 @@ where
 
         // Write central directory entries
         for file in &self.files {
+            let external_file_attrs = file.unix_permissions.map(|x| x << 16).unwrap_or(0)
+                | if file.is_dir {
+                    MSDOS_DIRECTORY_ATTRIBUTE
+                } else {
+                    0
+                };
+
             // Version made by and version needed to extract
             let version_needed = if file.needs_zip64() {
                 ZIP64_VERSION_NEEDED
@@ -901,7 +910,7 @@ where
                 file_comment_len: file.file_comment_len,
                 disk_number_start: 0,
                 internal_file_attrs: 0,
-                external_file_attrs: file.unix_permissions.map(|x| x << 16).unwrap_or(0),
+                external_file_attrs,
                 local_header_offset: file.local_header_offset.min(ZIP64_THRESHOLD_OFFSET) as u32,
             };
 
@@ -1082,6 +1091,7 @@ impl<'a, W> ZipEntryWriter<'a, W> {
             modification_time: self.modification_time,
             unix_permissions: self.unix_permissions,
             extra_fields: self.extra_fields,
+            is_dir: false,
         };
         self.inner.files.push(file_header);
 
@@ -1244,6 +1254,7 @@ struct FileHeader {
     modification_time: Option<UtcDateTime>,
     unix_permissions: Option<u32>,
     extra_fields: ExtraFieldsContainer,
+    is_dir: bool,
 }
 
 impl FileHeader {

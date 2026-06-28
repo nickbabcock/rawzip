@@ -1,6 +1,11 @@
 use rawzip::{ZipArchive, ZipArchiveWriter};
 use std::io::Write;
 
+fn central_external_attrs(data: &[u8], entry: &rawzip::ZipFileHeaderRecord<'_>) -> u32 {
+    let offset = entry.central_directory_offset() as usize + 38;
+    u32::from_le_bytes(data[offset..offset + 4].try_into().unwrap())
+}
+
 #[test]
 fn test_unix_permissions_roundtrip() {
     let test_cases = vec![
@@ -84,6 +89,23 @@ fn test_directory_permissions_roundtrip() {
         actual_mode, 0o040755,
         "Directory permissions: expected 0o040755, got 0o{actual_mode:o}"
     );
+
+    assert_eq!(central_external_attrs(&output, &entry) & 0x10, 0x10);
+}
+
+#[test]
+fn test_directory_without_unix_permissions_has_msdos_directory_attribute() {
+    let mut output = Vec::new();
+    let mut archive = ZipArchiveWriter::new(&mut output);
+    archive.new_dir("test_dir/").create().unwrap();
+    archive.finish().unwrap();
+
+    let archive = ZipArchive::from_slice(&output).unwrap();
+    let mut entries = archive.entries();
+    let entry = entries.next_entry().unwrap().unwrap();
+
+    assert!(entry.is_dir());
+    assert_eq!(central_external_attrs(&output, &entry) & 0x10, 0x10);
 }
 
 #[test]
