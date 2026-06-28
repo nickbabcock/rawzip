@@ -5,7 +5,7 @@ use crate::{
     ZipLocalFileHeaderFixed,
     errors::ErrorKind,
     extra_fields::{ExtraFieldId, ExtraFieldsContainer},
-    mode::{CreatorSystem, VersionMadeBy},
+    mode::{CreatorSystem, MSDOS_DIR, VersionMadeBy},
     path::{EntryPath, EntryPathInner, ZipFilePath, str_needs_utf8},
     time::{DosDateTime, UtcDateTime},
 };
@@ -868,6 +868,13 @@ where
 
         // Write central directory entries
         for file in &self.files {
+            let new_name_offset = name_offset + file.name_len as usize;
+            let file_name = &self.file_names[name_offset..new_name_offset];
+
+            let is_dir = ZipFilePath::from_bytes(file_name).is_dir();
+            let external_file_attrs = file.unix_permissions.map(|x| x << 16).unwrap_or(0)
+                | if is_dir { MSDOS_DIR } else { 0 };
+
             // Version made by and version needed to extract
             let version_needed = if file.needs_zip64() {
                 ZIP64_VERSION_NEEDED
@@ -904,16 +911,14 @@ where
                 file_comment_len: file.file_comment_len,
                 disk_number_start: 0,
                 internal_file_attrs: 0,
-                external_file_attrs: file.unix_permissions.map(|x| x << 16).unwrap_or(0),
+                external_file_attrs,
                 local_header_offset: file.local_header_offset.min(ZIP64_THRESHOLD_OFFSET) as u32,
             };
 
             header.write(&mut self.writer)?;
 
             // File name
-            let new_name_offset = name_offset + file.name_len as usize;
-            self.writer
-                .write_all(&self.file_names[name_offset..new_name_offset])?;
+            self.writer.write_all(file_name)?;
             name_offset = new_name_offset;
 
             // Extra fields

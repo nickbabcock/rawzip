@@ -97,6 +97,29 @@ fn test_directory_permissions_roundtrip() {
         actual_mode, 0o040755,
         "Directory permissions: expected 0o040755, got 0o{actual_mode:o}"
     );
+
+    assert_eq!(entry.external_attributes() & 0x10, 0x10);
+}
+
+#[test]
+fn test_directory_without_unix_permissions_has_msdos_directory_attribute() {
+    let mut output = Vec::new();
+    let mut archive = ZipArchiveWriter::new(&mut output);
+    archive.new_dir("test_dir/").create().unwrap();
+    archive.finish().unwrap();
+
+    let archive = ZipArchive::from_slice(&output).unwrap();
+    let mut entries = archive.entries();
+    let entry = entries.next_entry().unwrap().unwrap();
+
+    assert!(entry.is_dir());
+    assert_eq!(entry.external_attributes() & 0x10, 0x10);
+
+    let actual_mode = entry.mode().value();
+    assert_eq!(
+        actual_mode, 0o040777,
+        "Directory mode: expected 0o040777, got 0o{actual_mode:o}"
+    );
 }
 
 #[test]

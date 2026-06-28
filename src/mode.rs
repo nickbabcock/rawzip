@@ -151,7 +151,7 @@ const S_ISGID: u32 = 0o002000; // Set group ID
 const S_ISVTX: u32 = 0o001000; // Sticky bit
 
 /// MSDOS file attribute constants
-const MSDOS_DIR: u32 = 0x10;
+pub(crate) const MSDOS_DIR: u32 = 0x10;
 const MSDOS_READONLY: u32 = 0x01;
 
 /// Converts Unix mode to file mode
