@@ -161,7 +161,10 @@ fn errors_eq(a: &Error, b: &ErrorKind) -> bool {
         (ErrorKind::Eof, ErrorKind::Eof) => true,
         (ErrorKind::MissingEndOfCentralDirectory, ErrorKind::MissingEndOfCentralDirectory) => true,
         (ErrorKind::InvalidEndOfCentralDirectory, ErrorKind::InvalidEndOfCentralDirectory) => true,
-        (ErrorKind::BufferTooSmall, ErrorKind::BufferTooSmall) => true,
+        (
+            ErrorKind::BufferTooSmall { required: a },
+            ErrorKind::BufferTooSmall { required: b },
+        ) => a == b,
         _ => false,
     }
 }

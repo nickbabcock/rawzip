@@ -70,8 +70,12 @@ pub enum ErrorKind {
     /// Missing end of central directory
     MissingEndOfCentralDirectory,
 
-    /// Buffer size too small
-    BufferTooSmall,
+    /// Buffer size too small for the required capacity
+    ///
+    /// [`crate::RECOMMENDED_BUFFER_SIZE`] is suitable for normal archive
+    /// reading. A buffer sized to [`crate::MAX_CENTRAL_DIRECTORY_RECORD_SIZE`]
+    /// will never yield this error.
+    BufferTooSmall { required: usize },
 
     /// Invalid end of central directory signature
     InvalidSignature { expected: u32, actual: u32 },
@@ -128,8 +132,8 @@ impl core::fmt::Display for ErrorKind {
             ErrorKind::MissingEndOfCentralDirectory => {
                 write!(f, "Missing end of central directory")
             }
-            ErrorKind::BufferTooSmall => {
-                write!(f, "Buffer size too small")
+            ErrorKind::BufferTooSmall { required } => {
+                write!(f, "Buffer size too small: required {required} bytes")
             }
             ErrorKind::Eof => {
                 write!(f, "Unexpected end of file")

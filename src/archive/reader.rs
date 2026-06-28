@@ -390,7 +390,9 @@ where
 
         // Check if buffer is large enough for both filename and extra fields
         if buffer.len() < total_variable_len {
-            return Err(Error::from(ErrorKind::BufferTooSmall));
+            return Err(Error::from(ErrorKind::BufferTooSmall {
+                required: total_variable_len,
+            }));
         }
 
         let variable_data = &mut buffer[..total_variable_len];
@@ -558,6 +560,21 @@ where
         if self.pos + variable_length > self.end {
             // Need to read more data
             let remaining = self.end - self.pos;
+
+            // The buffer can never hold this record's variable section.
+            if variable_length > self.buffer.len() {
+                return Err(Error::from(ErrorKind::BufferTooSmall {
+                    required: variable_length,
+                }));
+            }
+
+            // The variable section runs past the end of the central directory,
+            // so the archive is truncated or corrupt.
+            let cd_remaining = remaining + (self.central_dir_end_pos - self.offset) as usize;
+            if variable_length > cd_remaining {
+                return Err(Error::from(ErrorKind::Eof));
+            }
+
             self.buffer.copy_within(self.pos..self.end, 0);
             let max_read = ((self.central_dir_end_pos - self.offset) as usize)
                 .min(self.buffer.len() - remaining);
