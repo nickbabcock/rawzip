@@ -16,15 +16,15 @@ in favor of associated constants:
 CompressionMethod::DEFLATE
 ```
 
-The reason is to prevent breaking changes in the future by properly modeling unknown compression methods that may be defined in future spec revisions. PR (#132)(https://github.com/nickbabcock/rawzip/pull/132)
+The reason is to prevent breaking changes in the future by properly modeling unknown compression methods that may be defined in future spec revisions. PR (#132)(<https://github.com/nickbabcock/rawzip/pull/132>)
 
 ### Breaking Changes
 
 - Fix incorrect compression methods:
-    - 10: Terse -> DclImplode (PKWARE DCL Imploding, old IBM TERSE)
-    - 16: add Cmpsc (IBM z/OS CMPSC Compression)
-    - 18: Lz77 -> Terse (IBM TERSE new)
-    - 19: add Lz77 (IBM LZ77 z Architecture)
+  - 10: Terse -> DclImplode (PKWARE DCL Imploding, old IBM TERSE)
+  - 16: add Cmpsc (IBM z/OS CMPSC Compression)
+  - 18: Lz77 -> Terse (IBM TERSE new)
+  - 19: add Lz77 (IBM LZ77 z Architecture)
 - `CompressionMethod` is a newtype over `u16` instead of an enum
 - Remove `ReaderAt` type parameter on `ZipVerifier`
 - `ZipReader::claim_verifier` borrows self and is infallible
@@ -70,6 +70,7 @@ The reason is to prevent breaking changes in the future by properly modeling unk
 - Raise minimum supported Rust version (MSRV) to 1.85 and move to the 2024 edition
 - Fix classic zip with 65536 entries failure to parse edge case
 - Fix failure to parse zip64 files that have a central directory size >= 4 GiB
+- Fix zip64 writer detection when central directory size >= 4 GiB
 - Fix missing zip64 extra field when writing directory entries past 4 GiB
 - Fix trailing slashes present in writer file entries in normalization
 - Update display and debug implementations for `CompressionMethod`
