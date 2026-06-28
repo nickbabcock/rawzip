@@ -5,7 +5,7 @@ use crate::{
     ZipLocalFileHeaderFixed,
     errors::ErrorKind,
     extra_fields::{ExtraFieldId, ExtraFieldsContainer},
-    mode::ZipCreatorSystem,
+    mode::{CreatorSystem, VersionMadeBy},
     path::{EntryPath, EntryPathInner, ZipFilePath, str_needs_utf8},
     time::{DosDateTime, UtcDateTime},
 };
@@ -876,11 +876,11 @@ where
             };
 
             // Set version_made_by to indicate Unix when Unix permissions are present
-            let version_made_by_hi = file
+            let creator_system = file
                 .unix_permissions
-                .map(|_| ZipCreatorSystem::CREATOR_UNIX)
-                .unwrap_or(0);
-            let version_made_by = (version_made_by_hi << 8) | version_needed;
+                .map(|_| CreatorSystem::UNIX)
+                .unwrap_or(CreatorSystem::FAT);
+            let version_made_by = VersionMadeBy::new(creator_system, version_needed as u8).as_u16();
 
             let dos = file
                 .modification_time

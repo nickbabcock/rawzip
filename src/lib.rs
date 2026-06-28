@@ -36,7 +36,7 @@ pub use headers::EntryFlags;
 #[cfg(feature = "std")]
 pub use headers::Header;
 pub use locator::*;
-pub use mode::EntryMode;
+pub use mode::{CreatorSystem, EntryMode, VersionMadeBy};
 #[cfg(feature = "alloc")]
 pub use path::EntryPath;
 #[cfg(feature = "std")]

@@ -1,12 +1,108 @@
-/// ZIP creator system constants used in version_made_by field
-pub enum ZipCreatorSystem {}
+/// The host system that produced a zip entry.
+///
+/// Derived from central directory "version made by" (APPNOTE § 4.4.2.2)
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+pub struct CreatorSystem(u8);
 
-impl ZipCreatorSystem {
-    pub const CREATOR_UNIX: u16 = 3;
-    pub const CREATOR_MACOS: u16 = 19;
-    pub const CREATOR_NTFS: u16 = 11;
-    pub const CREATOR_VFAT: u16 = 14;
-    pub const CREATOR_FAT: u16 = 0;
+impl CreatorSystem {
+    pub const FAT: Self = Self(0);
+    pub const UNIX: Self = Self(3);
+    pub const NTFS: Self = Self(10);
+
+    /// Go and Info-ZIP calls this NTFS
+    pub const MVS: Self = Self(11);
+    pub const VFAT: Self = Self(14);
+    pub const MACOS: Self = Self(19);
+
+    /// Wraps a raw creator-system identifier.
+    #[inline]
+    pub const fn new(id: u8) -> Self {
+        Self(id)
+    }
+
+    /// Returns the raw creator-system identifier.
+    #[inline]
+    pub const fn as_u8(self) -> u8 {
+        self.0
+    }
+
+    /// Returns the creator-system name (e.g. `"UNIX"`) when known.
+    #[inline]
+    pub const fn name(self) -> Option<&'static str> {
+        match self.0 {
+            0 => Some("FAT"),
+            3 => Some("UNIX"),
+            10 => Some("NTFS"),
+            11 => Some("MVS"),
+            14 => Some("VFAT"),
+            19 => Some("MACOS"),
+            _ => None,
+        }
+    }
+}
+
+impl core::fmt::Debug for CreatorSystem {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self.name() {
+            Some(name) => write!(f, "CreatorSystem::{name}"),
+            None => write!(f, "CreatorSystem({})", self.0),
+        }
+    }
+}
+
+impl core::fmt::Display for CreatorSystem {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(f, "{} ({})", self.0, self.name().unwrap_or("UNKNOWN"))
+    }
+}
+
+impl From<u8> for CreatorSystem {
+    fn from(id: u8) -> Self {
+        Self(id)
+    }
+}
+
+/// The "version made by" field from a central directory record
+///
+/// (APPNOTE § 4.4.2).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct VersionMadeBy(u16);
+
+impl VersionMadeBy {
+    /// Builds a value from a creator system and a ZIP specification version (in
+    /// tenths, e.g. `20` for version 2.0).
+    #[inline]
+    pub(crate) const fn new(system: CreatorSystem, zip_version: u8) -> Self {
+        Self(((system.as_u8() as u16) << 8) | zip_version as u16)
+    }
+
+    /// Wraps a raw "version made by" value.
+    #[inline]
+    pub const fn from_raw(value: u16) -> Self {
+        Self(value)
+    }
+
+    /// The host system that created the entry (the high byte).
+    #[inline]
+    pub const fn creator_system(self) -> CreatorSystem {
+        CreatorSystem((self.0 >> 8) as u8)
+    }
+
+    /// The ZIP specification version supported by the software that created the
+    /// entry.
+    ///
+    /// The value is encoded in tenths (APPNOTE § 4.4.2.3). For example, `20`
+    /// means version 2.0 and `45` means 4.5.
+    #[inline]
+    pub const fn zip_version(self) -> u8 {
+        self.0 as u8
+    }
+
+    /// Returns the raw "version made by" value.
+    #[inline]
+    pub const fn as_u16(self) -> u16 {
+        self.0
+    }
 }
 
 /// File mode information for a given zip file entry.
@@ -95,5 +191,58 @@ pub(crate) fn msdos_mode_to_file_mode(m: u32) -> u32 {
         S_IFREG | 0o444
     } else {
         S_IFREG | 0o666
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    extern crate alloc;
+    use alloc::format;
+
+    #[test]
+    fn creator_system_known_names() {
+        assert_eq!(CreatorSystem::FAT.name(), Some("FAT"));
+        assert_eq!(CreatorSystem::UNIX.name(), Some("UNIX"));
+        assert_eq!(CreatorSystem::NTFS.name(), Some("NTFS"));
+        assert_eq!(CreatorSystem::MVS.name(), Some("MVS"));
+        assert_eq!(CreatorSystem::VFAT.name(), Some("VFAT"));
+        assert_eq!(CreatorSystem::MACOS.name(), Some("MACOS"));
+        assert_eq!(CreatorSystem::new(7).name(), None);
+        assert_eq!(CreatorSystem::NTFS.as_u8(), 10);
+        assert_eq!(CreatorSystem::MVS.as_u8(), 11);
+    }
+
+    #[test]
+    fn creator_system_raw_roundtrip() {
+        for id in [0u8, 3, 10, 11, 14, 19, 7, 255] {
+            assert_eq!(CreatorSystem::new(id).as_u8(), id);
+            assert_eq!(CreatorSystem::from(id), CreatorSystem::new(id));
+        }
+    }
+
+    #[test]
+    fn creator_system_debug_and_display() {
+        assert_eq!(format!("{:?}", CreatorSystem::UNIX), "CreatorSystem::UNIX");
+        assert_eq!(format!("{:?}", CreatorSystem::new(7)), "CreatorSystem(7)");
+        assert_eq!(format!("{}", CreatorSystem::UNIX), "3 (UNIX)");
+        assert_eq!(format!("{}", CreatorSystem::new(7)), "7 (UNKNOWN)");
+    }
+
+    #[test]
+    fn version_made_by_decomposition() {
+        // High byte = creator system, low byte = zip version (tenths).
+        let v = VersionMadeBy::from_raw(0x031e);
+        assert_eq!(v.creator_system(), CreatorSystem::UNIX);
+        assert_eq!(v.zip_version(), 30);
+        assert_eq!(v.as_u16(), 0x031e);
+    }
+
+    #[test]
+    fn version_made_by_new_matches_raw() {
+        let v = VersionMadeBy::new(CreatorSystem::MACOS, 20);
+        assert_eq!(v.as_u16(), (19 << 8) | 20);
+        assert_eq!(v.creator_system(), CreatorSystem::MACOS);
+        assert_eq!(v.zip_version(), 20);
     }
 }

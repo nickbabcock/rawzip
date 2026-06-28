@@ -3,7 +3,7 @@
 use quickcheck_macros::quickcheck;
 use rawzip::extra_fields::ExtraFieldId;
 use rawzip::time::{LocalDateTime, UtcDateTime, ZipDateTimeKind};
-use rawzip::{Error, ErrorKind, ZipArchive, ZipArchiveWriter};
+use rawzip::{CreatorSystem, Error, ErrorKind, ZipArchive, ZipArchiveWriter};
 use std::cell::Cell;
 use std::fs::File;
 use std::io::{Cursor, Read, Seek, SeekFrom};
@@ -52,6 +52,7 @@ struct ZipTestFileEntry {
     expected_content: ExpectedContent,
     expected_datetime: Option<ZipDateTimeKind>,
     expected_mode: Option<u32>,
+    expected_creator_system: Option<CreatorSystem>,
 }
 
 #[derive(Debug)]
@@ -74,6 +75,7 @@ zip_test_case!(
                     UtcDateTime::from_components(2010, 9, 5, 2, 12, 1, 0).unwrap()
                 )), // 2010-09-05 02:12:01 UTC
                 expected_mode: Some(0o100644), // Regular file with 644 permissions
+                expected_creator_system: Some(CreatorSystem::UNIX),
             },
             ZipTestFileEntry {
                 name: "gophercolor16x16.png",
@@ -82,6 +84,7 @@ zip_test_case!(
                     UtcDateTime::from_components(2010, 9, 5, 5, 52, 58, 0).unwrap()
                 )), // 2010-09-05 05:52:58 UTC
                 expected_mode: Some(0o100644), // Regular file with 644 permissions
+                expected_creator_system: Some(CreatorSystem::UNIX),
             },
         ],
         ..Default::default()
@@ -110,6 +113,7 @@ zip_test_case!(
                     UtcDateTime::from_components(2010, 9, 5, 2, 12, 1, 0).unwrap()
                 )), // 2010-09-05 02:12:01 UTC
                 expected_mode: Some(0o100644), // Regular file with 644 permissions
+                expected_creator_system: Some(CreatorSystem::UNIX),
             },
             ZipTestFileEntry {
                 name: "gophercolor16x16.png",
@@ -118,6 +122,7 @@ zip_test_case!(
                     UtcDateTime::from_components(2010, 9, 5, 5, 52, 58, 0).unwrap()
                 )), // 2010-09-05 05:52:58 UTC
                 expected_mode: Some(0o100644), // Regular file with 644 permissions
+                expected_creator_system: Some(CreatorSystem::UNIX),
             },
         ],
         ..Default::default()
@@ -137,6 +142,7 @@ zip_test_case!(
                     UtcDateTime::from_components(2010, 9, 5, 2, 12, 1, 0).unwrap()
                 )), // 2010-09-05 02:12:01 UTC
                 expected_mode: Some(0o100644), // Regular file with 644 permissions
+                expected_creator_system: Some(CreatorSystem::UNIX),
             },
             ZipTestFileEntry {
                 name: "gophercolor16x16.png",
@@ -145,6 +151,7 @@ zip_test_case!(
                     UtcDateTime::from_components(2010, 9, 5, 5, 52, 58, 0).unwrap()
                 )), // 2010-09-05 05:52:58 UTC
                 expected_mode: Some(0o100644), // Regular file with 644 permissions
+                expected_creator_system: Some(CreatorSystem::UNIX),
             },
         ],
         ..Default::default()
@@ -162,6 +169,7 @@ zip_test_case!(
                 UtcDateTime::from_components(2012, 2, 3, 21, 56, 48, 0).unwrap()
             )), // 2012-02-03 21:56:48 (UTC from archive)
             expected_mode: Some(0o120777), // Symlink with 777 permissions
+            expected_creator_system: Some(CreatorSystem::UNIX),
         }],
         ..Default::default()
     }
@@ -178,7 +186,7 @@ zip_test_case!(
 zip_test_case!(
     "winxp",
     ZipTestCase {
-        // created in windows XP file manager.
+        // Created in the Windows XP file manager
         name: "winxp.zip",
         files: vec![
             ZipTestFileEntry {
@@ -188,6 +196,7 @@ zip_test_case!(
                     LocalDateTime::from_components(2011, 12, 8, 10, 4, 24, 0).unwrap()
                 )),
                 expected_mode: Some(0o100666), // Regular file with 666 permissions (Windows)
+                expected_creator_system: Some(CreatorSystem::MVS),
             },
             ZipTestFileEntry {
                 name: "dir/bar",
@@ -196,6 +205,7 @@ zip_test_case!(
                     LocalDateTime::from_components(2011, 12, 8, 10, 4, 50, 0).unwrap()
                 )),
                 expected_mode: Some(0o100666), // Regular file with 666 permissions (Windows)
+                expected_creator_system: Some(CreatorSystem::MVS),
             },
             ZipTestFileEntry {
                 name: "dir/empty/",
@@ -204,6 +214,7 @@ zip_test_case!(
                     LocalDateTime::from_components(2011, 12, 8, 10, 8, 6, 0).unwrap()
                 )),
                 expected_mode: Some(0o040777), // Directory with 777 permissions (Windows)
+                expected_creator_system: Some(CreatorSystem::MVS),
             },
             ZipTestFileEntry {
                 name: "readonly",
@@ -212,6 +223,7 @@ zip_test_case!(
                     LocalDateTime::from_components(2011, 12, 8, 10, 6, 8, 0).unwrap()
                 )),
                 expected_mode: Some(0o100444), // Read-only file (Windows)
+                expected_creator_system: Some(CreatorSystem::MVS),
             },
         ],
         ..Default::default()
@@ -231,6 +243,7 @@ zip_test_case!(
                     UtcDateTime::from_components(2011, 12, 8, 10, 4, 24, 0).unwrap()
                 )), // 2011-12-08 10:04:24 UTC (but stored as local time)
                 expected_mode: Some(0o100666), // Regular file with 666 permissions (Unix)
+                expected_creator_system: Some(CreatorSystem::UNIX),
             },
             ZipTestFileEntry {
                 name: "dir/bar",
@@ -239,6 +252,7 @@ zip_test_case!(
                     UtcDateTime::from_components(2011, 12, 8, 10, 4, 50, 0).unwrap()
                 )), // 2011-12-08 10:04:50 UTC (but stored as local time)
                 expected_mode: Some(0o100666), // Regular file with 666 permissions (Unix)
+                expected_creator_system: Some(CreatorSystem::UNIX),
             },
             ZipTestFileEntry {
                 name: "dir/empty/",
@@ -247,6 +261,7 @@ zip_test_case!(
                     UtcDateTime::from_components(2011, 12, 8, 10, 8, 6, 0).unwrap()
                 )), // 2011-12-08 10:08:06 UTC (but stored as local time)
                 expected_mode: Some(0o040777), // Directory with 777 permissions (Unix)
+                expected_creator_system: Some(CreatorSystem::UNIX),
             },
             ZipTestFileEntry {
                 name: "readonly",
@@ -255,6 +270,7 @@ zip_test_case!(
                     UtcDateTime::from_components(2011, 12, 8, 10, 6, 8, 0).unwrap()
                 )), // 2011-12-08 10:06:08 UTC (but stored as local time)
                 expected_mode: Some(0o100444), // Read-only file (Unix)
+                expected_creator_system: Some(CreatorSystem::UNIX),
             },
         ],
         ..Default::default()
@@ -275,6 +291,7 @@ zip_test_case!(
                     LocalDateTime::from_components(1980, 1, 1, 0, 0, 0, 0).unwrap()
                 )), // DOS timestamp 0x0000 0x0000 normalized to 1980-01-01 00:00:00
                 expected_mode: Some(0o100666), // Regular file with 666 permissions
+                expected_creator_system: Some(CreatorSystem::FAT),
             },
             ZipTestFileEntry {
                 name: "bar.txt",
@@ -283,6 +300,7 @@ zip_test_case!(
                     LocalDateTime::from_components(1980, 1, 1, 0, 0, 0, 0).unwrap()
                 )), // DOS timestamp 0x0000 0x0000 normalized to 1980-01-01 00:00:00
                 expected_mode: Some(0o100666), // Regular file with 666 permissions
+                expected_creator_system: Some(CreatorSystem::FAT),
             },
         ],
         ..Default::default()
@@ -301,6 +319,7 @@ zip_test_case!(
                     UtcDateTime::from_components(2012, 3, 9, 0, 59, 10, 0).unwrap()
                 )), // 2012-03-09 00:59:10 (UTC from archive)
                 expected_mode: Some(0o100644), // Regular file with 644 permissions
+                expected_creator_system: Some(CreatorSystem::UNIX),
             },
             ZipTestFileEntry {
                 name: "bar.txt",
@@ -309,6 +328,7 @@ zip_test_case!(
                     UtcDateTime::from_components(2012, 3, 9, 0, 59, 12, 0).unwrap()
                 )), // 2012-03-09 00:59:12 (UTC from archive)
                 expected_mode: Some(0o100644), // Regular file with 644 permissions
+                expected_creator_system: Some(CreatorSystem::UNIX),
             },
         ],
         ..Default::default()
@@ -328,6 +348,7 @@ zip_test_case!(
                 UtcDateTime::from_components(2012, 8, 10, 18, 33, 32, 0).unwrap()
             )), // 2012-08-10 18:33:32 (UTC from archive)
             expected_mode: Some(0o100644), // Regular file with 644 permissions
+            expected_creator_system: Some(CreatorSystem::UNIX),
         }],
         ..Default::default()
     }
@@ -344,6 +365,7 @@ zip_test_case!(
                 UtcDateTime::from_components(2017, 11, 1, 4, 11, 57, 244817900).unwrap()
             )), // 2017-10-31 21:11:57.244817900 (-7 hours) = 2017-11-01 04:11:57.244817900 UTC
             expected_mode: Some(0o100666), // Regular file with 666 permissions
+            expected_creator_system: Some(CreatorSystem::FAT),
         }],
         ..Default::default()
     }
@@ -360,6 +382,7 @@ zip_test_case!(
                 UtcDateTime::from_components(2017, 11, 1, 4, 11, 57, 0).unwrap()
             )), // 2017-10-31 21:11:57.000 (-7 hours) = 2017-11-01 04:11:57.000 UTC
             expected_mode: Some(0o100644), // Regular file with 644 permissions
+            expected_creator_system: Some(CreatorSystem::UNIX),
         }],
         ..Default::default()
     }
@@ -376,6 +399,7 @@ zip_test_case!(
                 UtcDateTime::from_components(2017, 11, 1, 4, 11, 57, 0).unwrap()
             )), // 2017-10-31 21:11:57.000 (-7 hours) = 2017-11-01 04:11:57.000 UTC
             expected_mode: Some(0o100644), // Regular file with 644 permissions
+            expected_creator_system: Some(CreatorSystem::UNIX),
         }],
         ..Default::default()
     }
@@ -392,6 +416,7 @@ zip_test_case!(
                 LocalDateTime::from_components(2017, 10, 31, 21, 11, 58, 0).unwrap()
             )), // 2017-10-31 21:11:58.000 (DOS local time)
             expected_mode: Some(0o100666), // Regular file with 666 permissions
+            expected_creator_system: Some(CreatorSystem::FAT),
         }],
         ..Default::default()
     }
@@ -408,6 +433,7 @@ zip_test_case!(
                 UtcDateTime::from_components(2017, 11, 1, 4, 11, 57, 244817900).unwrap()
             )), // 2017-10-31 21:11:57.244817900 (-7 hours) = 2017-11-01 04:11:57.244817900 UTC
             expected_mode: Some(0o100666), // Regular file with 666 permissions
+            expected_creator_system: Some(CreatorSystem::FAT),
         }],
         ..Default::default()
     }
@@ -424,6 +450,7 @@ zip_test_case!(
                 UtcDateTime::from_components(2017, 11, 1, 4, 11, 57, 244000000).unwrap()
             )), // 2017-10-31 21:11:57.244000000 (-7 hours) = 2017-11-01 04:11:57.244000000 UTC
             expected_mode: Some(0o100666), // Regular file with 666 permissions
+            expected_creator_system: Some(CreatorSystem::FAT),
         }],
         ..Default::default()
     }
@@ -440,6 +467,7 @@ zip_test_case!(
                 UtcDateTime::from_components(2017, 11, 1, 4, 11, 57, 0).unwrap()
             )), // 2017-10-31 21:11:57.000 (-7 hours) = 2017-11-01 04:11:57.000 UTC
             expected_mode: Some(0o100666), // Regular file with 666 permissions
+            expected_creator_system: Some(CreatorSystem::FAT),
         }],
         ..Default::default()
     }
@@ -458,6 +486,7 @@ zip_test_case!(
                     UtcDateTime::from_components(2010, 9, 5, 2, 12, 1, 0).unwrap()
                 )), // 2010-09-05 02:12:01 UTC
                 expected_mode: Some(0o100644), // Regular file with 644 permissions
+                expected_creator_system: Some(CreatorSystem::UNIX),
             },
             ZipTestFileEntry {
                 name: "gophercolor16x16.png",
@@ -466,6 +495,7 @@ zip_test_case!(
                     UtcDateTime::from_components(2010, 9, 5, 5, 52, 58, 0).unwrap()
                 )), // 2010-09-05 05:52:58 UTC
                 expected_mode: Some(0o100644), // Regular file with 644 permissions
+                expected_creator_system: Some(CreatorSystem::UNIX),
             },
         ],
         ..Default::default()
@@ -485,6 +515,7 @@ zip_test_case!(
                     UtcDateTime::from_components(2010, 9, 5, 2, 12, 1, 0).unwrap()
                 )), // 2010-09-05 02:12:01 UTC
                 expected_mode: Some(0o100644), // Regular file with 644 permissions
+                expected_creator_system: Some(CreatorSystem::UNIX),
             },
             ZipTestFileEntry {
                 name: "gophercolor16x16.png",
@@ -493,6 +524,7 @@ zip_test_case!(
                     UtcDateTime::from_components(2010, 9, 5, 5, 52, 58, 0).unwrap()
                 )), // 2010-09-05 05:52:58 UTC
                 expected_mode: Some(0o100644), // Regular file with 644 permissions
+                expected_creator_system: Some(CreatorSystem::UNIX),
             },
         ],
         ..Default::default()
@@ -544,6 +576,15 @@ fn process_archive_files<R: rawzip::ReaderAt>(
                                 actual_mode, expected_mode,
                                 "Mode mismatch for file {}: expected 0o{:o}, got 0o{:o}",
                                 expected_file.name, expected_mode, actual_mode
+                            );
+                        }
+
+                        if let Some(expected_creator) = expected_file.expected_creator_system {
+                            let actual_creator = entry.version_made_by().creator_system();
+                            assert_eq!(
+                                actual_creator, expected_creator,
+                                "Creator system mismatch for file {}: expected {:?}, got {:?}",
+                                expected_file.name, expected_creator, actual_creator
                             );
                         }
 
@@ -651,6 +692,15 @@ fn process_slice_archive_files(
                                 actual_mode, expected_mode,
                                 "Mode mismatch for file {}: expected 0o{:o}, got 0o{:o}",
                                 expected_file.name, expected_mode, actual_mode
+                            );
+                        }
+
+                        if let Some(expected_creator) = expected_file.expected_creator_system {
+                            let actual_creator = entry.version_made_by().creator_system();
+                            assert_eq!(
+                                actual_creator, expected_creator,
+                                "Creator system mismatch for file {}: expected {:?}, got {:?}",
+                                expected_file.name, expected_creator, actual_creator
                             );
                         }
 
