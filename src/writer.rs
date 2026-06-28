@@ -858,6 +858,11 @@ where
         let central_directory_offset = self.writer.count();
         let total_entries = self.files.len();
 
+        // Finalize each entry's ZIP64 extra fields as needed
+        for file in &mut self.files {
+            file.finalize_extra_fields()?;
+        }
+
         // Determine if we need ZIP64 format
         let needs_zip64 = total_entries >= ZIP64_THRESHOLD_ENTRIES
             || central_directory_offset >= ZIP64_THRESHOLD_OFFSET
@@ -1066,7 +1071,7 @@ impl<'a, W> ZipEntryWriter<'a, W> {
 
         self.inner.writer.write_all(out_data)?;
 
-        let mut file_header = FileHeader {
+        let file_header = FileHeader {
             name_len: self.name_len,
             file_comment_len: self.file_comment_len,
             compression_method: self.compression_method,
@@ -1079,7 +1084,6 @@ impl<'a, W> ZipEntryWriter<'a, W> {
             unix_permissions: self.unix_permissions,
             extra_fields: self.extra_fields,
         };
-        file_header.finalize_extra_fields()?;
         self.inner.files.push(file_header);
 
         Ok(self.compressed_bytes)

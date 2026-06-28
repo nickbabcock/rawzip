@@ -1,4 +1,7 @@
-use rawzip::{RECOMMENDED_BUFFER_SIZE, ZipArchive, ZipArchiveWriter};
+use rawzip::{
+    CompressionMethod, Crc32Option, RECOMMENDED_BUFFER_SIZE, ZipArchive, ZipArchiveWriter,
+    ZipLocator,
+};
 use rstest::rstest;
 use std::io::{Cursor, Write};
 
@@ -92,4 +95,118 @@ fn test_zip64_threshold_entries(#[case] entry_count: usize, #[case] should_be_zi
 fn read_zip64_from_cd_size_sentinel() {
     let data = std::fs::read("assets/zip64-cd-size-sentinel.zip").unwrap();
     verify_expected_entries(&data, 2);
+}
+
+fn is_all_zero(buf: &[u8]) -> bool {
+    const ZEROS: [u8; 256] = [0u8; 256];
+    let mut chunks = buf.chunks_exact(ZEROS.len());
+    chunks.all(|chunk| chunk == ZEROS) && chunks.remainder().iter().all(|&b| b == 0)
+}
+
+/// A `Write` sink recording only non-zero writes plus a running byte count.
+/// All-zero writes (the multi-GiB filler) are dropped, keeping just their length.
+/// This technique has been borrowed from go's zip64_sparse_test.go.
+#[derive(Default)]
+struct SparseBuffer {
+    size: u64,
+    spans: Vec<(u64, Vec<u8>)>,
+}
+
+impl Write for SparseBuffer {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        if !is_all_zero(buf) {
+            self.spans.push((self.size, buf.to_vec()));
+        }
+        self.size += buf.len() as u64;
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+/// A `ReaderAt` view over the recorded spans, zeros elsewhere.
+struct SparseFile {
+    size: u64,
+    spans: Vec<(u64, Vec<u8>)>,
+}
+
+impl rawzip::ReaderAt for SparseFile {
+    fn read_at(&self, buf: &mut [u8], offset: u64) -> std::io::Result<usize> {
+        if offset >= self.size {
+            return Ok(0);
+        }
+        let end = (offset + buf.len() as u64).min(self.size);
+        let n = (end - offset) as usize;
+        buf[..n].fill(0);
+        for (span_off, data) in &self.spans {
+            let span_end = span_off + data.len() as u64;
+            if span_end <= offset || *span_off >= end {
+                continue;
+            }
+            let from = (*span_off).max(offset);
+            let to = span_end.min(end);
+            let dst = (from - offset) as usize..(to - offset) as usize;
+            let src = (from - span_off) as usize..(to - span_off) as usize;
+            buf[dst].copy_from_slice(&data[src]);
+        }
+        Ok(n)
+    }
+}
+
+#[test]
+fn directory_entry_past_4gib_offset_round_trips() {
+    let mut sink = SparseBuffer::default();
+    let mut archive = ZipArchiveWriter::new(&mut sink);
+
+    // A >4 GiB stored entry so the following directory's local header offset
+    // trips the ZIP64 offset threshold. CRC is skipped so we don't hash 4 GiB.
+    let (mut entry, config) = archive
+        .new_file("filler.bin")
+        .compression_method(CompressionMethod::STORE)
+        .crc32(Crc32Option::Skip)
+        .start()
+        .unwrap();
+    let mut data_writer = config.wrap(&mut entry);
+    let zeros = vec![0u8; 1024 * 1024];
+    for _ in 0..4096 {
+        data_writer.write_all(&zeros).unwrap();
+    }
+    let (_, output) = data_writer.finish().unwrap();
+    entry.finish(output).unwrap();
+
+    archive.new_dir("past_4gib/").create().unwrap();
+    archive.finish().unwrap();
+
+    let sparse = SparseFile {
+        size: sink.size,
+        spans: sink.spans,
+    };
+    assert!(
+        sparse.size > u32::MAX as u64,
+        "archive should span past 4 GiB, got {}",
+        sparse.size
+    );
+
+    let mut buffer = vec![0u8; RECOMMENDED_BUFFER_SIZE];
+    let end = sparse.size;
+    let archive = ZipLocator::new()
+        .locate_in_reader(sparse, &mut buffer, end)
+        .map_err(|(_, e)| e)
+        .unwrap();
+
+    let mut dir = None;
+    let mut entries = archive.entries(&mut buffer);
+    while let Some(entry) = entries.next_entry().unwrap() {
+        if entry.file_path().as_ref() == b"past_4gib/" {
+            dir = Some(entry.wayfinder());
+        }
+    }
+    let dir = dir.expect("past_4gib/ directory entry present in central directory");
+
+    // Assert that we can seek and read the local header
+    archive
+        .get_entry(dir)
+        .expect("directory local header must be reachable");
 }
