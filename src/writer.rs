@@ -863,11 +863,6 @@ where
             file.finalize_extra_fields()?;
         }
 
-        // Determine if we need ZIP64 format
-        let needs_zip64 = total_entries >= ZIP64_THRESHOLD_ENTRIES
-            || central_directory_offset >= ZIP64_THRESHOLD_OFFSET
-            || self.files.iter().any(FileHeader::needs_zip64);
-
         let mut name_offset = 0;
         let mut comment_offset = 0;
 
@@ -932,6 +927,10 @@ where
 
         let central_directory_end = self.writer.count();
         let central_directory_size = central_directory_end - central_directory_offset;
+        let needs_zip64 = total_entries >= ZIP64_THRESHOLD_ENTRIES
+            || central_directory_size >= ZIP64_THRESHOLD_OFFSET
+            || central_directory_offset >= ZIP64_THRESHOLD_OFFSET
+            || self.files.iter().any(FileHeader::needs_zip64);
 
         // Write ZIP64 structures if needed
         if needs_zip64 {
