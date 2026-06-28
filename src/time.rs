@@ -704,14 +704,9 @@ fn parse_unix_timestamp(data: &[u8]) -> Option<UtcDateTime> {
 fn unix_timestamp_to_components(timestamp: i64) -> (u16, u8, u8, u8, u8, u8) {
     const SECONDS_PER_DAY: i64 = 86400;
 
-    // Break timestamp into days and seconds within day
-    let total_days = timestamp / SECONDS_PER_DAY;
-    let mut seconds_in_day = timestamp % SECONDS_PER_DAY;
-
-    // Handle negative remainder for negative timestamps
-    if seconds_in_day < 0 {
-        seconds_in_day += SECONDS_PER_DAY;
-    }
+    // Break timestamp into days and seconds within day.
+    let total_days = timestamp.div_euclid(SECONDS_PER_DAY);
+    let seconds_in_day = timestamp.rem_euclid(SECONDS_PER_DAY);
 
     // Convert seconds within day to H:M:S
     let hour = (seconds_in_day / 3600) as u8;
@@ -725,8 +720,8 @@ fn unix_timestamp_to_components(timestamp: i64) -> (u16, u8, u8, u8, u8, u8) {
     let days_since_shifted_epoch = days_since_epoch + 719468; // Days from 0000-03-01 to 1970-01-01
 
     // Calculate the era (400-year period)
-    let era = days_since_shifted_epoch / 146097;
-    let days_of_era = days_since_shifted_epoch % 146097;
+    let era = days_since_shifted_epoch.div_euclid(146097);
+    let days_of_era = days_since_shifted_epoch.rem_euclid(146097);
 
     // Calculate year within the era (0-399)
     let year_of_era =
@@ -1035,19 +1030,24 @@ mod tests {
 
     #[test]
     fn test_negative_unix_timestamps() {
-        // Test that negative timestamps (before 1970) work correctly
-        let negative_timestamp = -86400; // One day before epoch (1969-12-31)
-        let datetime = UtcDateTime::from_unix(negative_timestamp);
+        let cases = [
+            (-1, (1969, 12, 31, 23, 59, 59)),
+            (-86400, (1969, 12, 31, 0, 0, 0)),
+            (-86401, (1969, 12, 30, 23, 59, 59)),
+            (-100000, (1969, 12, 30, 20, 13, 20)),
+        ];
 
-        assert_eq!(datetime.year(), 1969);
-        assert_eq!(datetime.month(), 12);
-        assert_eq!(datetime.day(), 31);
-        assert_eq!(datetime.hour(), 0);
-        assert_eq!(datetime.minute(), 0);
-        assert_eq!(datetime.second(), 0);
+        for (negative_timestamp, (year, month, day, hour, minute, second)) in cases {
+            let datetime = UtcDateTime::from_unix(negative_timestamp);
 
-        // Round trip test
-        assert_eq!(datetime.to_unix(), negative_timestamp);
+            assert_eq!(datetime.year(), year);
+            assert_eq!(datetime.month(), month);
+            assert_eq!(datetime.day(), day);
+            assert_eq!(datetime.hour(), hour);
+            assert_eq!(datetime.minute(), minute);
+            assert_eq!(datetime.second(), second);
+            assert_eq!(datetime.to_unix(), negative_timestamp);
+        }
     }
 
     #[test]
@@ -1182,10 +1182,11 @@ mod property_tests {
     use quickcheck_macros::quickcheck;
 
     #[quickcheck]
-    fn prop_unix_timestamp_conversion(unix_seconds: u32) {
-        let zip_datetime = UtcDateTime::from_unix(i64::from(unix_seconds));
+    fn prop_unix_timestamp_conversion(unix_seconds: i32) {
+        let unix_seconds = i64::from(unix_seconds);
+        let zip_datetime = UtcDateTime::from_unix(unix_seconds);
 
-        let Ok(timestamp) = jiff::Timestamp::from_second(unix_seconds as i64) else {
+        let Ok(timestamp) = jiff::Timestamp::from_second(unix_seconds) else {
             return;
         };
 
@@ -1202,7 +1203,7 @@ mod property_tests {
 
         assert_eq!(
             zip_datetime.to_unix(),
-            i64::from(unix_seconds),
+            unix_seconds,
             "to_unix should match input"
         );
     }
