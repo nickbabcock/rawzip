@@ -382,8 +382,7 @@ where
             .get_ref()
             .read_exact_at(&mut header_buffer, self.entry.local_header_offset)?;
 
-        let local_header_fixed =
-            ZipLocalFileHeaderFixed::parse(&header_buffer).expect("header has already been parsed");
+        let local_header_fixed = ZipLocalFileHeaderFixed::parse(&header_buffer)?;
         let file_name_len = local_header_fixed.file_name_len as usize;
         let extra_field_len = local_header_fixed.extra_field_len as usize;
         let total_variable_len = file_name_len + extra_field_len;
