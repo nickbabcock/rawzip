@@ -4,6 +4,7 @@ use quickcheck_macros::quickcheck;
 use rawzip::extra_fields::ExtraFieldId;
 use rawzip::time::{LocalDateTime, UtcDateTime, ZipDateTimeKind};
 use rawzip::{Error, ErrorKind, ZipArchive, ZipArchiveWriter};
+use std::cell::Cell;
 use std::fs::File;
 use std::io::{Cursor, Read, Seek, SeekFrom};
 use std::path::Path;
@@ -1143,6 +1144,67 @@ fn test_local_header_declared_fields_match_central_directory() {
     let reader_local_header = reader_zip_entry.local_header(&mut local_buffer).unwrap();
 
     assert_eq!(reader_local_header, slice_local_header);
+}
+
+#[derive(Debug)]
+struct DivergentLocalHeaderReader {
+    data: Vec<u8>,
+    local_header_offset: u64,
+    local_header_reads: Cell<usize>,
+}
+
+impl AsRef<[u8]> for DivergentLocalHeaderReader {
+    fn as_ref(&self) -> &[u8] {
+        &self.data
+    }
+}
+
+impl rawzip::ReaderAt for DivergentLocalHeaderReader {
+    fn read_at(&self, buf: &mut [u8], offset: u64) -> std::io::Result<usize> {
+        let start = usize::try_from(offset)
+            .unwrap_or(usize::MAX)
+            .min(self.data.len());
+        let len = (self.data.len() - start).min(buf.len());
+        buf[..len].copy_from_slice(&self.data[start..start + len]);
+
+        if offset == self.local_header_offset && buf.len() >= 4 {
+            let reads = self.local_header_reads.get();
+            self.local_header_reads.set(reads + 1);
+
+            if reads > 0 {
+                buf[..4].copy_from_slice(&0u32.to_le_bytes());
+            }
+        }
+
+        Ok(len)
+    }
+}
+
+#[test]
+fn reader_local_header_returns_error_when_reread_diverges() {
+    let data = std::fs::read("assets/crc32-not-streamed.zip").unwrap();
+    let archive = ZipArchive::from_slice(&data).unwrap();
+    let entry_header = archive.entries().next_entry().unwrap().unwrap();
+    let local_header_offset = entry_header.local_header_offset();
+
+    let divergent = DivergentLocalHeaderReader {
+        data,
+        local_header_offset,
+        local_header_reads: Cell::new(0),
+    };
+    let reader_archive = ZipArchive::from_slice(divergent).unwrap().into_reader();
+    let mut buffer = vec![0u8; rawzip::RECOMMENDED_BUFFER_SIZE];
+    let mut entries = reader_archive.entries(&mut buffer);
+    let entry_header = entries.next_entry().unwrap().unwrap();
+    let entry = reader_archive.get_entry(entry_header.wayfinder()).unwrap();
+
+    let mut local_buffer = vec![0u8; rawzip::RECOMMENDED_BUFFER_SIZE];
+    let err = entry.local_header(&mut local_buffer).unwrap_err();
+
+    assert!(matches!(
+        err.kind(),
+        rawzip::ErrorKind::InvalidSignature { .. }
+    ));
 }
 
 #[test]
