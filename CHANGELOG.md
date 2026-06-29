@@ -47,6 +47,7 @@ The reason is to prevent breaking changes in the future by properly modeling unk
 
 ### Features and Changes
 
+- Central directory iteration now stops cleanly at the first non-central-directory-header signature instead of erroring, so archives with data between the central directory and the EOCD (such as Firefox's optimized `omni.ja`) parse without the caller swallowing an error. The trailing region is exposed via `position` and `central_directory_end`.
 - Expose the slice reading APIs under "no std" and "no alloc" cargo feature flags
 - Add `EntryFlags` to expose the general purpose bit flags on file entries
 - Add `ZipFileHeaderRecord::comment` for zip entry central directory comment

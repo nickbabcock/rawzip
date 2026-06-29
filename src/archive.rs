@@ -131,6 +131,21 @@ impl<T: AsRef<[u8]>> ZipSliceArchive<T> {
         self.eocd.directory_offset()
     }
 
+    /// The offset where the end of central directory record begins.
+    ///
+    /// For zip64 archives this is the offset of the zip64 end of central
+    /// directory record; otherwise it is the offset of the end of central
+    /// directory record (differing from [`Self::eocd_offset`], the trailing end
+    /// of central directory record, only for zip64 archives). In a conventional
+    /// archive the last central directory entry ends here, but an archive may
+    /// place data between the central directory and the end of central directory
+    /// record (for example Firefox's optimized `omni.ja`). Together with
+    /// [`ZipSliceEntries::position`] this bounds that region: once iteration
+    /// stops, `[position, central_directory_end)` holds any such trailing bytes.
+    pub fn central_directory_end(&self) -> u64 {
+        self.eocd.head_eocd_offset()
+    }
+
     /// Returns the offset where the ZIP archive ends.
     ///
     /// This returns the position immediately after the last byte of the ZIP
@@ -363,9 +378,16 @@ pub struct ZipSliceEntries<'data> {
 
 impl<'data> ZipSliceEntries<'data> {
     /// Yield the next zip file entry in the central directory if there is any
+    ///
+    /// Iteration stops as soon as the next record does not begin with the
+    /// central directory header signature (`0x02014b50`). Any data between the
+    /// last entry and the end of central directory record is therefore left
+    /// unparsed; it can be recovered via [`Self::position`] and
+    /// [`ZipSliceArchive::central_directory_end`]. A record that does start with
+    /// the signature but is truncated still returns an error.
     #[inline]
     pub fn next_entry(&mut self) -> Result<Option<ZipFileHeaderRecord<'data>>, Error> {
-        if self.entry_data.is_empty() {
+        if self.entry_data.len() < 4 || le_u32(&self.entry_data[..4]) != CENTRAL_HEADER_SIGNATURE {
             return Ok(None);
         }
 
@@ -387,6 +409,19 @@ impl<'data> ZipSliceEntries<'data> {
         self.current_offset += (self.entry_data.len() - entry_data.len()) as u64;
         self.entry_data = entry_data;
         Ok(Some(entry))
+    }
+
+    /// The offset immediately following the last yielded entry.
+    ///
+    /// Before any entry is yielded this equals
+    /// [`ZipSliceArchive::directory_offset`]. Once iteration has stopped, the
+    /// region `[position, central_directory_end)` holds any bytes between the
+    /// last central directory entry and the end of central directory record.
+    /// Validating the number of yielded entries against
+    /// [`ZipSliceArchive::entries_hint`] is left to the caller.
+    #[inline]
+    pub fn position(&self) -> u64 {
+        self.current_offset
     }
 }
 

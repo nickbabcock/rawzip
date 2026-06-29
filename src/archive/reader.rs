@@ -1,6 +1,7 @@
 use super::*;
 use crate::Crc32;
 use crate::reader_at::{FileReader, MutexReader, RangeReader, ReaderAt, ReaderAtExt};
+use crate::utils::le_u32;
 use std::io::{Read, Seek};
 
 #[derive(Debug, Clone)]
@@ -199,6 +200,22 @@ impl<R> ZipArchive<R> {
     /// returned on the first entry.
     pub fn directory_offset(&self) -> u64 {
         self.eocd.directory_offset()
+    }
+
+    /// The offset where the end of central directory record begins.
+    ///
+    /// This has the same semantics as
+    /// [`ZipSliceArchive::central_directory_end`]: for zip64 archives it is the
+    /// offset of the zip64 end of central directory record, otherwise the offset
+    /// of the end of central directory record (differing from
+    /// [`Self::eocd_offset`] only for zip64 archives). In a conventional archive
+    /// the last central directory entry ends here, but an archive may place data
+    /// between the central directory and the end of central directory record.
+    /// Together with [`ZipEntries::position`] this bounds that region: once
+    /// iteration stops, `[position, central_directory_end)` holds any such
+    /// trailing bytes.
+    pub fn central_directory_end(&self) -> u64 {
+        self.eocd.head_eocd_offset()
     }
 
     /// Returns the offset where the ZIP archive ends.
@@ -532,28 +549,45 @@ where
     /// buffer to parse entry headers.
     #[inline]
     pub fn next_entry(&mut self) -> Result<Option<ZipFileHeaderRecord<'_>>, Error> {
-        if self.pos + ZipFileHeaderFixed::SIZE >= self.end {
-            if self.offset >= self.central_dir_end_pos {
-                return Ok(None);
+        // Ensure a full fixed header is buffered before parsing. When fewer than
+        // a header's worth of central directory bytes remain, hand off to the
+        // cold tail which distinguishes a clean stop from a truncated record.
+        if self.pos + ZipFileHeaderFixed::SIZE > self.end {
+            // Keep this in u64: on a 32-bit target the central directory region
+            // can exceed usize, so casting before the comparison could truncate
+            // a large remainder to a small value and stop iteration early. Once
+            // the comparison establishes the remainder is below a fixed header,
+            // narrowing to usize is lossless.
+            let cd_remaining =
+                (self.end - self.pos) as u64 + (self.central_dir_end_pos - self.offset);
+            if cd_remaining < ZipFileHeaderFixed::SIZE as u64 {
+                return self.next_entry_tail(cd_remaining as usize);
             }
 
-            let remaining = self.end - self.pos;
-            self.buffer.copy_within(self.pos..self.end, 0);
-            let max_read = ((self.central_dir_end_pos - self.offset) as usize)
-                .min(self.buffer.len() - remaining);
-            let read = self.archive.reader.read_at_least_at(
-                &mut self.buffer[remaining..][..max_read],
-                ZipFileHeaderFixed::SIZE,
-                self.offset,
-            )?;
-            self.offset += read as u64;
-            self.pos = 0;
-            self.end = remaining + read;
+            // The buffer is too small to ever hold a fixed header; report the
+            // real requirement, not the (smaller) shortfall left to read.
+            if self.buffer.len() < ZipFileHeaderFixed::SIZE {
+                return Err(Error::from(ErrorKind::BufferTooSmall {
+                    required: ZipFileHeaderFixed::SIZE,
+                }));
+            }
+            self.refill(ZipFileHeaderFixed::SIZE)?;
         }
 
-        let central_directory_offset = self.offset - (self.end - self.pos) as u64;
+        let central_directory_offset = self.position();
         let data = &self.buffer[self.pos..self.end];
-        let file_header = ZipFileHeaderFixed::parse(data)?;
+        let file_header = match ZipFileHeaderFixed::parse(data) {
+            Ok(file_header) => file_header,
+            // A record that does not begin with the central directory header
+            // signature marks the end of the central directory. Any trailing
+            // bytes between here and the end of central directory record are
+            // left for the caller to inspect via `position` and
+            // `central_directory_end`.
+            Err(e) if matches!(e.kind(), ErrorKind::InvalidSignature { .. }) => {
+                return Ok(None);
+            }
+            Err(e) => return Err(e),
+        };
         self.pos += ZipFileHeaderFixed::SIZE;
 
         let variable_length = file_header.variable_length();
@@ -575,17 +609,7 @@ where
                 return Err(Error::from(ErrorKind::Eof));
             }
 
-            self.buffer.copy_within(self.pos..self.end, 0);
-            let max_read = ((self.central_dir_end_pos - self.offset) as usize)
-                .min(self.buffer.len() - remaining);
-            let read = self.archive.reader.read_at_least_at(
-                &mut self.buffer[remaining..][..max_read],
-                variable_length - remaining,
-                self.offset,
-            )?;
-            self.offset += read as u64;
-            self.pos = 0;
-            self.end = remaining + read;
+            self.refill(variable_length)?;
         }
 
         let data = &self.buffer[self.pos..self.end];
@@ -602,6 +626,75 @@ where
         file_header.local_header_offset += self.base_offset;
         self.pos += variable_length;
         Ok(Some(file_header))
+    }
+
+    /// Handles the end of the central directory, where fewer than a fixed
+    /// header's worth of bytes (`cd_remaining`) remain. Decides between a clean
+    /// stop and a truncated record using just the 4-byte signature, so that
+    /// trailing data smaller than a header is never misread as one.
+    #[cold]
+    fn next_entry_tail(
+        &mut self,
+        cd_remaining: usize,
+    ) -> Result<Option<ZipFileHeaderRecord<'_>>, Error> {
+        // Fewer than a signature's worth of bytes remain before the end of
+        // central directory record, so iteration is complete.
+        if cd_remaining < 4 {
+            return Ok(None);
+        }
+
+        // Buffer the signature so we can tell whether a (truncated) central
+        // directory header follows.
+        if self.end - self.pos < 4 {
+            // The buffer is too small to hold even a signature; report the real
+            // requirement, not the (smaller) shortfall left to read.
+            if self.buffer.len() < 4 {
+                return Err(Error::from(ErrorKind::BufferTooSmall { required: 4 }));
+            }
+            self.refill(4)?;
+        }
+
+        if le_u32(&self.buffer[self.pos..self.pos + 4]) == CENTRAL_HEADER_SIGNATURE {
+            Err(Error::from(ErrorKind::Eof))
+        } else {
+            Ok(None)
+        }
+    }
+
+    /// Slides the unconsumed bytes to the front of the buffer and reads from the
+    /// central directory until at least `need` bytes are buffered.
+    ///
+    /// The caller must guarantee that the buffer can hold `need` bytes and that
+    /// at least `need` bytes remain before the end of the central directory;
+    /// reads never cross into the end of central directory record.
+    #[inline]
+    fn refill(&mut self, need: usize) -> Result<(), Error> {
+        let remaining = self.end - self.pos;
+        self.buffer.copy_within(self.pos..self.end, 0);
+        let max_read = ((self.central_dir_end_pos - self.offset) as usize)
+            .min(self.buffer.len() - remaining);
+        let read = self.archive.reader.read_at_least_at(
+            &mut self.buffer[remaining..][..max_read],
+            need - remaining,
+            self.offset,
+        )?;
+        self.offset += read as u64;
+        self.pos = 0;
+        self.end = remaining + read;
+        Ok(())
+    }
+
+    /// The offset immediately following the last yielded entry.
+    ///
+    /// Before any entry is yielded this equals
+    /// [`ZipArchive::directory_offset`]. Once iteration has stopped, the region
+    /// `[position, central_directory_end)` holds any bytes between the last
+    /// central directory entry and the end of central directory record.
+    /// Validating the number of yielded entries against
+    /// [`ZipArchive::entries_hint`] is left to the caller.
+    #[inline]
+    pub fn position(&self) -> u64 {
+        self.offset - (self.end - self.pos) as u64
     }
 }
 

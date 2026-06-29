@@ -18,6 +18,7 @@ mod false_sentinel_tests;
 mod false_signature_tests;
 mod modification_time_tests;
 mod permission_tests;
+mod trailing_data_tests;
 mod utf8_tests;
 mod zip64_tests;
 
@@ -1192,10 +1193,10 @@ fn test_central_directory_offset_consistency() {
 #[test]
 fn test_ff_optimized_jar() {
     // Firefox's omni.ja is an interesting use case where the central directory
-    // is placed at the start of the file. Rawzip can parse this file, but it
-    // requires the end user to do entry bookkeeping, as central directory will
-    // end long before the EOCD is encountered. The test case is a smaller
-    // version of omni.ja: https://taras.glek.net/posts/optimized-zip-format/
+    // is placed at the start of the file. Rawzip can parse this file, as the
+    // central directory ends long before the EOCD is encountered. The test case
+    // is a smaller version of omni.ja:
+    // https://taras.glek.net/posts/optimized-zip-format/
     let data = std::fs::read("assets/omni-mini.ja").unwrap();
     let archive = ZipArchive::from_slice(&data).unwrap();
     let mut entries = archive.entries();
@@ -1212,10 +1213,12 @@ fn test_ff_optimized_jar() {
     let count = std::io::copy(&mut reader, &mut std::io::sink()).unwrap();
     assert_eq!(first.uncompressed_size_hint(), count);
 
-    // We expect an error, but we provide enough tools for consumers to be able
-    // to swallow this error if they choose when certain conditions are met
-    // (like the number of entries seen are expected).
-    entries.next().unwrap().unwrap_err();
+    // Once the declared central directory entries are exhausted, iteration
+    // stops cleanly at the first non-central-directory-header signature rather
+    // than parsing the file data that sits between the central directory and
+    // the EOCD. That trailing region is exposed for the caller to inspect.
+    assert!(entries.next().is_none());
+    assert!(entries.position() < archive.central_directory_end());
 }
 
 #[test]
@@ -1236,7 +1239,11 @@ fn test_ff_optimized_jar_reader() {
     let mut reader = entry.verifying_reader(reader);
     let count = std::io::copy(&mut reader, &mut std::io::sink()).unwrap();
     assert_eq!(first.uncompressed_size_hint(), count);
-    entries.next_entry().unwrap_err();
+
+    // Iteration stops cleanly after the declared entries; the data between the
+    // central directory and the EOCD is left for the caller to inspect.
+    assert!(entries.next_entry().unwrap().is_none());
+    assert!(entries.position() < archive.central_directory_end());
 }
 
 /// An archive whose single entry has the largest central directory record the
@@ -1326,4 +1333,49 @@ fn entry_overrunning_central_directory_is_eof() {
     let mut entries = archive.entries(&mut buf);
     let err = entries.next_entry().unwrap_err();
     assert!(matches!(err.kind(), rawzip::ErrorKind::Eof));
+}
+
+#[test]
+fn too_small_entry_buffer_reports_full_header_requirement() {
+    // A buffer smaller than the 46-byte fixed central directory header must
+    // report the full header size as the requirement, not the transient
+    // shortfall between what is already buffered and what is still needed. A
+    // shortfall-based value shrinks as more bytes happen to be buffered and can
+    // trap a caller that grows its buffer to `required` and retries.
+    let mut output = Vec::new();
+    let mut writer = ZipArchiveWriter::new(&mut output);
+    let (entry, config) = writer
+        .new_file("alpha.txt")
+        .compression_method(rawzip::CompressionMethod::STORE)
+        .start()
+        .unwrap();
+    let (entry, descriptor) = config.wrap(entry).finish().unwrap();
+    entry.finish(descriptor).unwrap();
+    writer.finish().unwrap();
+
+    // Locate with an adequate buffer, then iterate with an undersized one
+    // (`entries` accepts its own buffer). 45 bytes is one short of a fixed
+    // central directory header.
+    let mut locate_buf = vec![0u8; rawzip::RECOMMENDED_BUFFER_SIZE];
+    let archive = rawzip::ZipLocator::new()
+        .locate_in_reader(output.as_slice(), &mut locate_buf, output.len() as u64)
+        .unwrap();
+
+    let mut small = vec![0u8; 45];
+    let mut entries = archive.entries(&mut small);
+    let err = entries.next_entry().unwrap_err();
+    assert!(
+        matches!(
+            err.kind(),
+            rawzip::ErrorKind::BufferTooSmall { required: 46 }
+        ),
+        "expected BufferTooSmall {{ required: 46 }}, got {:?}",
+        err.kind()
+    );
+
+    // Growing the buffer to exactly the reported requirement makes progress.
+    let mut buf = vec![0u8; 46];
+    let mut entries = archive.entries(&mut buf);
+    let entry = entries.next_entry().unwrap().expect("entry present");
+    assert_eq!(entry.file_path().as_bytes(), b"alpha.txt");
 }
