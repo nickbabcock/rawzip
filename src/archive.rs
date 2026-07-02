@@ -4,8 +4,7 @@ use crate::errors::{Error, ErrorKind};
 use crate::extra_fields::{ExtraFieldId, ExtraFields};
 use crate::headers::EntryFlags;
 use crate::mode::{
-    CREATOR_FAT, CREATOR_MACOS, CREATOR_NTFS, CREATOR_UNIX, CREATOR_VFAT, EntryMode,
-    msdos_mode_to_file_mode, unix_mode_to_file_mode,
+    CreatorSystem, EntryMode, VersionMadeBy, msdos_mode_to_file_mode, unix_mode_to_file_mode,
 };
 use crate::path::{RawPath, ZipFilePath};
 #[cfg(feature = "std")]
@@ -716,27 +715,6 @@ impl DataDescriptor {
     }
 }
 
-/// 4.4.2
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct VersionMadeBy(u16);
-
-#[allow(dead_code)]
-impl VersionMadeBy {
-    pub fn as_u16(&self) -> u16 {
-        self.0
-    }
-
-    /// The (major, minor) ZIP specification version supported by the software
-    /// used to encode the file.
-    ///
-    /// 4.4.2.3: The lower byte, The value / 10 indicates the major version
-    /// number, and the value mod 10 is the minor version number.
-    pub fn version(&self) -> (u8, u8) {
-        let v = (self.0 >> 8) as u8;
-        (v / 10, v % 10)
-    }
-}
-
 #[derive(Debug, Clone)]
 pub(crate) struct Zip64EndOfCentralDirectory {
     pub offset: u64,
@@ -810,7 +788,7 @@ impl Zip64EndOfCentralDirectoryRecord {
         let result = Zip64EndOfCentralDirectoryRecord {
             signature: le_u32(&data[0..4]),
             size: le_u64(&data[4..12]),
-            version_made_by: VersionMadeBy(le_u16(&data[12..14])),
+            version_made_by: VersionMadeBy::from_raw(le_u16(&data[12..14])),
             version_needed: le_u16(&data[14..16]),
             disk_number: le_u32(&data[16..20]),
             cd_disk: le_u32(&data[20..24]),
@@ -1316,15 +1294,17 @@ println!("Safe path: {}", safe_path.as_ref());
     }
 
     /// Returns the file mode information extracted from the external file attributes.
+    ///
+    /// Is a convenience method over interpreting
+    /// [`version_made_by`](Self::version_made_by) and
+    /// [`external_attributes`](Self::external_attributes).
     #[inline]
     pub fn mode(&self) -> EntryMode {
-        let creator_version = self.version_made_by >> 8;
-
-        let mut mode = match creator_version {
-            // Unix and macOS
-            CREATOR_UNIX | CREATOR_MACOS => unix_mode_to_file_mode(self.external_file_attrs >> 16),
-            // NTFS, VFAT, FAT
-            CREATOR_NTFS | CREATOR_VFAT | CREATOR_FAT => {
+        let mut mode = match self.version_made_by().creator_system() {
+            CreatorSystem::UNIX | CreatorSystem::MACOS => {
+                unix_mode_to_file_mode(self.external_file_attrs >> 16)
+            }
+            CreatorSystem::FAT | CreatorSystem::NTFS | CreatorSystem::MVS | CreatorSystem::VFAT => {
                 msdos_mode_to_file_mode(self.external_file_attrs)
             }
             // default to basic permissions
@@ -1337,6 +1317,21 @@ println!("Safe path: {}", safe_path.as_ref());
         }
 
         EntryMode::new(mode)
+    }
+
+    /// Returns the "version made by" field stored in the central directory record.
+    #[inline]
+    pub fn version_made_by(&self) -> VersionMadeBy {
+        VersionMadeBy::from_raw(self.version_made_by)
+    }
+
+    /// Returns the raw external file attributes stored in the central directory.
+    ///
+    /// Consider if [`mode`](Self::mode) is a better alternative than accessing
+    /// the raw bytes.
+    #[inline]
+    pub fn external_attributes(&self) -> u32 {
+        self.external_file_attrs
     }
 
     /// The declared CRC32 checksum of the uncompressed data.

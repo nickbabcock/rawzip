@@ -1,4 +1,4 @@
-use rawzip::{ZipArchive, ZipArchiveWriter};
+use rawzip::{CreatorSystem, ZipArchive, ZipArchiveWriter};
 use std::io::Write;
 
 #[test]
@@ -48,6 +48,19 @@ fn test_unix_permissions_roundtrip() {
         assert_eq!(
             actual_mode, expected_mode,
             "{description}: expected permissions 0o{expected_mode:o}, got 0o{actual_mode:o}"
+        );
+
+        // Unix permissions are recorded as a UNIX creator system with the mode
+        // in the upper 16 bits of the external attributes.
+        assert_eq!(
+            entry.version_made_by().creator_system(),
+            CreatorSystem::UNIX,
+            "{description}: expected UNIX creator system"
+        );
+        assert_eq!(
+            entry.external_attributes() >> 16,
+            permissions,
+            "{description}: external attributes should carry the unix mode"
         );
     }
 }
@@ -115,4 +128,9 @@ fn test_permissions_without_unix_permissions() {
         actual_mode, 0o100666,
         "Default permissions: expected 0o100666, got 0o{actual_mode:o}"
     );
+
+    // Without unix permissions the writer falls back to a FAT creator system
+    // and empty external attributes.
+    assert_eq!(entry.version_made_by().creator_system(), CreatorSystem::FAT);
+    assert_eq!(entry.external_attributes(), 0);
 }
