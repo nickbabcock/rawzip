@@ -1223,6 +1223,25 @@ pub struct DataDescriptorOutput {
 }
 
 impl DataDescriptorOutput {
+    /// Constructs a `DataDescriptorOutput` from a known CRC32 and uncompressed
+    /// size.
+    ///
+    /// This is for callers that write **already-compressed** bytes directly to
+    /// a [`ZipEntryWriter`] (e.g. copying an entry verbatim from one archive to
+    /// another without re-compressing) and therefore cannot obtain the
+    /// descriptor from [`ZipDataWriter::finish`], which derives these values by
+    /// running the *uncompressed* data through a hasher.
+    ///
+    /// The `compressed_size` is not taken here: [`ZipEntryWriter::finish`]
+    /// overwrites it with the number of bytes actually written to the entry.
+    pub fn new(crc: u32, uncompressed_size: u64) -> Self {
+        DataDescriptorOutput {
+            crc,
+            compressed_size: 0,
+            uncompressed_size,
+        }
+    }
+
     /// Returns the CRC32 checksum of the uncompressed data.
     pub fn crc(&self) -> u32 {
         self.crc
@@ -1781,5 +1800,74 @@ mod tests {
         archive.set_comment(too_long);
 
         assert!(archive.finish().is_err());
+    }
+
+    #[test]
+    fn test_raw_passthrough_with_data_descriptor_output_new() {
+        use flate2::write::DeflateEncoder;
+        use std::io::Write;
+
+        let data = b"the quick brown fox jumps over the lazy dog";
+
+        // Build a source archive with one Deflate-compressed entry.
+        let mut src = Cursor::new(Vec::new());
+        {
+            let mut archive = ZipArchiveWriter::new(&mut src);
+            let (mut entry, config) = archive
+                .new_file("src.txt")
+                .compression_method(CompressionMethod::DEFLATE)
+                .start()
+                .unwrap();
+            let mut writer = config.wrap(DeflateEncoder::new(
+                &mut entry,
+                flate2::Compression::default(),
+            ));
+            writer.write_all(data).unwrap();
+            let (_, descriptor) = writer.finish().unwrap();
+            entry.finish(descriptor).unwrap();
+            archive.finish().unwrap();
+        }
+        let src_bytes = src.into_inner();
+
+        // Read the source entry's raw (still-compressed) bytes + metadata.
+        let src_archive = ZipArchive::from_slice(&src_bytes).unwrap();
+        let mut entries = src_archive.entries();
+        let dir_entry = entries.next_entry().unwrap().unwrap();
+        let src_crc = dir_entry.crc32();
+        let src_uncompressed = dir_entry.uncompressed_size_hint();
+        let wayfinder = dir_entry.wayfinder();
+        let src_local = src_archive.get_entry(wayfinder).unwrap();
+        let raw_compressed = src_local.data().to_vec();
+
+        // Copy the raw compressed bytes verbatim into a new archive, supplying
+        // the known CRC + uncompressed size via DataDescriptorOutput::new.
+        let mut dst = Cursor::new(Vec::new());
+        {
+            let mut archive = ZipArchiveWriter::new(&mut dst);
+            let (mut entry, _config) = archive
+                .new_file("copy.txt")
+                .compression_method(CompressionMethod::DEFLATE)
+                .start()
+                .unwrap();
+            entry.write_all(&raw_compressed).unwrap();
+            entry
+                .finish(DataDescriptorOutput::new(src_crc, src_uncompressed))
+                .unwrap();
+            archive.finish().unwrap();
+        }
+        let dst_bytes = dst.into_inner();
+
+        // The copied entry must decode back to the original data and verify.
+        let dst_archive = ZipArchive::from_slice(&dst_bytes).unwrap();
+        let mut dst_entries = dst_archive.entries();
+        let dst_dir = dst_entries.next_entry().unwrap().unwrap();
+        assert_eq!(dst_dir.crc32(), src_crc);
+        assert_eq!(dst_dir.uncompressed_size_hint(), src_uncompressed);
+        let dst_local = dst_archive.get_entry(dst_dir.wayfinder()).unwrap();
+        let mut verifier = dst_local
+            .verifying_reader(flate2::bufread::DeflateDecoder::new(dst_local.data()));
+        let mut actual = Vec::new();
+        std::io::copy(&mut verifier, &mut actual).unwrap();
+        assert_eq!(&actual, data);
     }
 }
