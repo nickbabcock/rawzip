@@ -1223,6 +1223,86 @@ pub struct DataDescriptorOutput {
 }
 
 impl DataDescriptorOutput {
+    /// Constructs a `DataDescriptorOutput` from a known CRC32 and uncompressed
+    /// size.
+    ///
+    /// This is for callers that write **already-compressed** bytes directly to
+    /// a [`ZipEntryWriter`] (e.g. copying an entry verbatim from one archive to
+    /// another without re-compressing) and therefore cannot obtain the
+    /// descriptor from [`ZipDataWriter::finish`], which derives these values by
+    /// running the *uncompressed* data through a hasher.
+    ///
+    /// The `compressed_size` is not taken here: [`ZipEntryWriter::finish`]
+    /// overwrites it with the number of bytes actually written to the entry.
+    ///
+    /// # Example: copy an entry verbatim between archives
+    ///
+    /// Read an entry's raw (still-compressed) bytes plus its CRC and
+    /// uncompressed size from a source archive, and write them straight into a
+    /// new archive — no decompression or re-compression. The entry's original
+    /// compression method is preserved on the destination.
+    ///
+    /// ```rust
+    /// # use std::io::Write;
+    /// # use rawzip::{
+    /// #     CompressionMethod, DataDescriptorOutput, ZipArchive, ZipArchiveWriter,
+    /// # };
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// // A source archive with one entry (Stored here for a dependency-free
+    /// // example; the same works for any compression method).
+    /// let mut src = std::io::Cursor::new(Vec::new());
+    /// let mut sw = ZipArchiveWriter::new(&mut src);
+    /// let (mut e, config) = sw
+    ///     .new_file("hello.txt")
+    ///     .compression_method(CompressionMethod::STORE)
+    ///     .start()?;
+    /// let mut w = config.wrap(&mut e);
+    /// w.write_all(b"Hello, world!")?;
+    /// let (_, desc) = w.finish()?;
+    /// e.finish(desc)?;
+    /// sw.finish()?;
+    /// let src = src.into_inner();
+    ///
+    /// // Read the source entry's metadata + raw compressed bytes.
+    /// let archive = ZipArchive::from_slice(&src)?;
+    /// let mut entries = archive.entries();
+    /// let dir = entries.next_entry()?.expect("one entry");
+    /// let crc = dir.crc32();
+    /// let uncompressed_size = dir.uncompressed_size_hint();
+    /// let method = dir.compression_method();
+    /// let local = archive.get_entry(dir.wayfinder())?;
+    /// let raw = local.data();
+    ///
+    /// // Copy those raw bytes into a new archive with no re-compression,
+    /// // supplying the known CRC + uncompressed size via `DataDescriptorOutput::new`.
+    /// let mut dst = std::io::Cursor::new(Vec::new());
+    /// let mut dw = ZipArchiveWriter::new(&mut dst);
+    /// let (mut out, _config) = dw
+    ///     .new_file("hello.txt")
+    ///     .compression_method(method)
+    ///     .start()?;
+    /// out.write_all(raw)?;
+    /// out.finish(DataDescriptorOutput::new(crc, uncompressed_size))?;
+    /// dw.finish()?;
+    ///
+    /// // The copy round-trips: same CRC and uncompressed size.
+    /// let dst = dst.into_inner();
+    /// let copied = ZipArchive::from_slice(&dst)?;
+    /// let mut it = copied.entries();
+    /// let e = it.next_entry()?.expect("one entry");
+    /// assert_eq!(e.crc32(), crc);
+    /// assert_eq!(e.uncompressed_size_hint(), uncompressed_size);
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn new(crc: u32, uncompressed_size: u64) -> Self {
+        DataDescriptorOutput {
+            crc,
+            compressed_size: 0,
+            uncompressed_size,
+        }
+    }
+
     /// Returns the CRC32 checksum of the uncompressed data.
     pub fn crc(&self) -> u32 {
         self.crc
@@ -1781,5 +1861,74 @@ mod tests {
         archive.set_comment(too_long);
 
         assert!(archive.finish().is_err());
+    }
+
+    #[test]
+    fn test_raw_passthrough_with_data_descriptor_output_new() {
+        use flate2::write::DeflateEncoder;
+        use std::io::Write;
+
+        let data = b"the quick brown fox jumps over the lazy dog";
+
+        // Build a source archive with one Deflate-compressed entry.
+        let mut src = Cursor::new(Vec::new());
+        {
+            let mut archive = ZipArchiveWriter::new(&mut src);
+            let (mut entry, config) = archive
+                .new_file("src.txt")
+                .compression_method(CompressionMethod::DEFLATE)
+                .start()
+                .unwrap();
+            let mut writer = config.wrap(DeflateEncoder::new(
+                &mut entry,
+                flate2::Compression::default(),
+            ));
+            writer.write_all(data).unwrap();
+            let (_, descriptor) = writer.finish().unwrap();
+            entry.finish(descriptor).unwrap();
+            archive.finish().unwrap();
+        }
+        let src_bytes = src.into_inner();
+
+        // Read the source entry's raw (still-compressed) bytes + metadata.
+        let src_archive = ZipArchive::from_slice(&src_bytes).unwrap();
+        let mut entries = src_archive.entries();
+        let dir_entry = entries.next_entry().unwrap().unwrap();
+        let src_crc = dir_entry.crc32();
+        let src_uncompressed = dir_entry.uncompressed_size_hint();
+        let wayfinder = dir_entry.wayfinder();
+        let src_local = src_archive.get_entry(wayfinder).unwrap();
+        let raw_compressed = src_local.data();
+
+        // Copy the raw compressed bytes verbatim into a new archive, supplying
+        // the known CRC + uncompressed size via DataDescriptorOutput::new.
+        let mut dst = Cursor::new(Vec::new());
+        {
+            let mut archive = ZipArchiveWriter::new(&mut dst);
+            let (mut entry, _config) = archive
+                .new_file("copy.txt")
+                .compression_method(CompressionMethod::DEFLATE)
+                .start()
+                .unwrap();
+            entry.write_all(raw_compressed).unwrap();
+            entry
+                .finish(DataDescriptorOutput::new(src_crc, src_uncompressed))
+                .unwrap();
+            archive.finish().unwrap();
+        }
+        let dst_bytes = dst.into_inner();
+
+        // The copied entry must decode back to the original data and verify.
+        let dst_archive = ZipArchive::from_slice(&dst_bytes).unwrap();
+        let mut dst_entries = dst_archive.entries();
+        let dst_dir = dst_entries.next_entry().unwrap().unwrap();
+        assert_eq!(dst_dir.crc32(), src_crc);
+        assert_eq!(dst_dir.uncompressed_size_hint(), src_uncompressed);
+        let dst_local = dst_archive.get_entry(dst_dir.wayfinder()).unwrap();
+        let mut verifier =
+            dst_local.verifying_reader(flate2::bufread::DeflateDecoder::new(dst_local.data()));
+        let mut actual = Vec::new();
+        std::io::copy(&mut verifier, &mut actual).unwrap();
+        assert_eq!(&actual, data);
     }
 }
