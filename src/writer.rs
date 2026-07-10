@@ -13,6 +13,7 @@ use std::io::{self, Write};
 
 // ZIP64 constants
 const ZIP64_VERSION_NEEDED: u16 = 45; // 4.5
+const DEFAULT_VERSION_NEEDED: u16 = 20; // 2.0
 const ZIP64_EOCD_SIZE: usize = 56;
 
 // General purpose bit flags
@@ -245,7 +246,7 @@ impl<W> ZipArchiveWriter<W> {
     /// // 3. Get end of compressed data offset
     /// let end_data_offset = file.stream_offset();
     ///
-    /// let compressed_bytes = file.finish(desc).unwrap();
+    /// let written_entry = file.finish(desc).unwrap();
     ///
     /// // 4. Get end of data descriptor offset (next file's local header offset)
     /// let end_descriptor_offset = archive.stream_offset();
@@ -256,7 +257,7 @@ impl<W> ZipArchiveWriter<W> {
     /// assert!(data_start_offset > local_header_offset);
     /// assert_eq!(end_data_offset, data_start_offset + b"Hello World".len() as u64);
     /// assert_eq!(end_descriptor_offset, end_data_offset + 16); // 16 bytes for data descriptor
-    /// assert_eq!(compressed_bytes, end_data_offset - data_start_offset);
+    /// assert_eq!(written_entry.compressed_size(), end_data_offset - data_start_offset);
     /// ```
     pub fn stream_offset(&self) -> u64 {
         self.writer.count()
@@ -596,7 +597,7 @@ where
     }
 
     /// Creates the directory entry.
-    pub fn create(self) -> Result<(), Error> {
+    pub fn create(self) -> Result<WrittenZipEntry, Error> {
         let options = ZipEntryOptions {
             compression_method: CompressionMethod::STORE, // Directories always use Store
             modification_time: self.modification_time,
@@ -641,7 +642,7 @@ where
 
         let header = ZipLocalFileHeaderFixed {
             signature: ZipLocalFileHeaderFixed::SIGNATURE,
-            version_needed: 20,
+            version_needed: DEFAULT_VERSION_NEEDED,
             flags: EntryFlags::new(flags),
             compression_method,
             last_mod_time: dos.packed_time(),
@@ -695,7 +696,7 @@ where
         &mut self,
         path: EntryPath<'_>,
         options: ZipEntryOptions,
-    ) -> Result<(), Error> {
+    ) -> Result<WrittenZipEntry, Error> {
         with_resolved_entry_path(path, false, |path_bytes, needs_utf8| {
             self.write_dir_entry(path_bytes, needs_utf8, options)
         })
@@ -707,7 +708,7 @@ where
         path_bytes: &[u8],
         needs_utf8: bool,
         mut options: ZipEntryOptions,
-    ) -> Result<(), Error> {
+    ) -> Result<WrittenZipEntry, Error> {
         if !ZipFilePath::from_bytes(path_bytes).is_dir() {
             return Err(Error::from(ErrorKind::InvalidInput {
                 msg: "not a directory".to_string(),
@@ -748,7 +749,20 @@ where
         };
         self.files.push(file_header);
 
-        Ok(())
+        Ok(WrittenZipEntry {
+            local_header_offset,
+            crc32: 0,
+            compressed_size: 0,
+            uncompressed_size: 0,
+            compression_method: CompressionMethod::STORE,
+            flags: EntryFlags::new(flags),
+            version_needed: DEFAULT_VERSION_NEEDED,
+            last_modified_dos: options
+                .modification_time
+                .as_ref()
+                .map(DosDateTime::from)
+                .unwrap_or_default(),
+        })
     }
 
     /// Creates a builder for adding a new file to the archive.
@@ -879,7 +893,7 @@ where
             let version_needed = if file.needs_zip64() {
                 ZIP64_VERSION_NEEDED
             } else {
-                20
+                DEFAULT_VERSION_NEEDED
             };
 
             // Set version_made_by to indicate Unix when Unix permissions are present
@@ -1052,8 +1066,9 @@ impl<'a, W> ZipEntryWriter<'a, W> {
 
     /// Finishes writing the file entry.
     ///
-    /// This writes the data descriptor if necessary and adds the file entry to the central directory.
-    pub fn finish(self, mut output: DataDescriptorOutput) -> Result<u64, Error>
+    /// This writes the data descriptor, adds the file entry to the central
+    /// directory, and returns a description of the written entry.
+    pub fn finish(self, mut output: DataDescriptorOutput) -> Result<WrittenZipEntry, Error>
     where
         W: Write,
     {
@@ -1093,7 +1108,20 @@ impl<'a, W> ZipEntryWriter<'a, W> {
         };
         self.inner.files.push(file_header);
 
-        Ok(self.compressed_bytes)
+        Ok(WrittenZipEntry {
+            local_header_offset: self.local_header_offset,
+            crc32: output.crc,
+            compressed_size: output.compressed_size,
+            uncompressed_size: output.uncompressed_size,
+            compression_method: self.compression_method,
+            flags: EntryFlags::new(self.flags),
+            version_needed: DEFAULT_VERSION_NEEDED,
+            last_modified_dos: self
+                .modification_time
+                .as_ref()
+                .map(DosDateTime::from)
+                .unwrap_or_default(),
+        })
     }
 }
 
@@ -1109,6 +1137,33 @@ where
 
     fn flush(&mut self) -> io::Result<()> {
         self.inner.writer.flush()
+    }
+}
+
+/// A file or directory entry that has been written to a ZIP archive.
+#[derive(Debug, Clone, Copy)]
+pub struct WrittenZipEntry {
+    #[allow(dead_code)] // Stored for future use.
+    local_header_offset: u64,
+    #[allow(dead_code)] // Stored for future use.
+    crc32: u32,
+    compressed_size: u64,
+    #[allow(dead_code)] // Stored for future use.
+    uncompressed_size: u64,
+    #[allow(dead_code)] // Stored for future use.
+    compression_method: CompressionMethod,
+    #[allow(dead_code)] // Stored for future use.
+    flags: EntryFlags,
+    #[allow(dead_code)] // Stored for future use.
+    version_needed: u16,
+    #[allow(dead_code)] // Stored for future use.
+    last_modified_dos: DosDateTime,
+}
+
+impl WrittenZipEntry {
+    /// The number of compressed bytes written for the entry.
+    pub fn compressed_size(&self) -> u64 {
+        self.compressed_size
     }
 }
 
@@ -1485,6 +1540,71 @@ mod tests {
     }
 
     #[test]
+    fn written_entry_captures_finalized_entry_facts() {
+        let mut output = Cursor::new(Vec::new());
+        let mut archive = ZipArchiveWriter::new(&mut output);
+        let (mut entry, config) = archive.new_file("file.txt").start().unwrap();
+
+        let mut writer = config.wrap(&mut entry);
+        writer.write_all(b"hello").unwrap();
+        let (_, descriptor) = writer.finish().unwrap();
+        let written_entry = entry.finish(descriptor).unwrap();
+
+        assert_eq!(written_entry.local_header_offset, 0);
+        assert_eq!(written_entry.crc32, crate::crc32(b"hello"));
+        assert_eq!(written_entry.compressed_size(), 5);
+        assert_eq!(written_entry.uncompressed_size, 5);
+        assert_eq!(written_entry.compression_method, CompressionMethod::STORE);
+        assert!(written_entry.flags.has_data_descriptor());
+        assert_eq!(written_entry.version_needed, DEFAULT_VERSION_NEEDED);
+        assert_eq!(written_entry.last_modified_dos, DosDateTime::default());
+
+        archive.finish().unwrap();
+
+        let data = output.into_inner();
+        let archive = ZipArchive::from_slice(&data).unwrap();
+        let mut entries = archive.entries();
+        let record = entries.next_entry().unwrap().unwrap();
+
+        assert_eq!(
+            written_entry.local_header_offset,
+            record.local_header_offset()
+        );
+        assert_eq!(written_entry.crc32, record.crc32());
+        assert_eq!(
+            written_entry.compressed_size(),
+            record.compressed_size_hint()
+        );
+        assert_eq!(
+            written_entry.uncompressed_size,
+            record.uncompressed_size_hint()
+        );
+        assert_eq!(
+            written_entry.compression_method,
+            record.compression_method()
+        );
+        assert_eq!(written_entry.flags, record.flags());
+        assert_eq!(written_entry.last_modified_dos, record.last_modified_dos());
+    }
+
+    #[test]
+    fn directory_creation_returns_written_entry() {
+        let mut output = Cursor::new(Vec::new());
+        let mut archive = ZipArchiveWriter::new(&mut output);
+
+        let written_entry = archive.new_dir("dir/").create().unwrap();
+
+        assert_eq!(written_entry.local_header_offset, 0);
+        assert_eq!(written_entry.compressed_size(), 0);
+        assert_eq!(written_entry.uncompressed_size, 0);
+        assert_eq!(written_entry.compression_method, CompressionMethod::STORE);
+        assert!(!written_entry.flags.has_data_descriptor());
+        assert_eq!(written_entry.version_needed, DEFAULT_VERSION_NEEDED);
+
+        archive.finish().unwrap();
+    }
+
+    #[test]
     fn test_new_file_never_produces_directory_name() {
         for (input, expected) in [("dir\\", "dir"), ("a/b/../", "a"), ("x/", "x")] {
             let mut output = Cursor::new(Vec::new());
@@ -1547,7 +1667,7 @@ mod tests {
         // Test case 3: Get end of compressed data offset
         let end_data_offset = file.stream_offset();
 
-        let compressed_bytes = file.finish(desc).unwrap();
+        let written_entry = file.finish(desc).unwrap();
 
         // Test case 4: Get end of data descriptor offset (next file's local header offset)
         let end_descriptor_offset = archive.stream_offset();
@@ -1562,7 +1682,10 @@ mod tests {
             data_start_offset + b"Hello World".len() as u64
         );
         assert_eq!(end_descriptor_offset, end_data_offset + 16); // 16 bytes for data descriptor
-        assert_eq!(compressed_bytes, end_data_offset - data_start_offset);
+        assert_eq!(
+            written_entry.compressed_size(),
+            end_data_offset - data_start_offset
+        );
     }
 
     #[test]

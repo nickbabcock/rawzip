@@ -48,8 +48,9 @@ std::io::copy(&mut &data[..], &mut writer)?;
 // Finish the file, which will return the finalized data descriptor
 let (_, descriptor) = writer.finish()?;
 
-// Write out the data descriptor and return the number of bytes the data compressed to.
-let compressed = entry.finish(descriptor)?;
+// Write out the data descriptor and return a description of the written entry.
+let written_entry = entry.finish(descriptor)?;
+let compressed = written_entry.compressed_size();
 
 // Finish the archive, which will write the central directory.
 archive.finish()?;
