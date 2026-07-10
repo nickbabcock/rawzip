@@ -62,6 +62,7 @@ The reason is to prevent breaking changes in the future by properly modeling unk
 - Add `ZipFileBuilder::encrypted` to set the encryption general purpose bit (caller is still responsible for actually doing the encryption).
 - Add `ZipSliceArchive::get_ref` and  `into_inner` to borrow or recover the underlying data
 - Add `Add ZipArchive::get_mut` to mutably access the reader
+- Add `DataDescriptorOutput::new` to write compressed content without recompression
 - Expose local header crc, uncompressed size, and compressed size
 - Expose `Crc32` streaming accumulator
 - Preserve trailing slash in directories when normalization required
