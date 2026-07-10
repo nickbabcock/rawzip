@@ -25,7 +25,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // 3. Verify: the copy decodes to the same content, entry for entry.
     verify(&source, &copied)?;
 
-    println!("passthrough copy verified: {} bytes -> {} bytes", source.len(), copied.len());
+    println!(
+        "passthrough copy verified: {} bytes -> {} bytes",
+        source.len(),
+        copied.len()
+    );
     Ok(())
 }
 
@@ -40,7 +44,11 @@ fn build_source() -> Result<Vec<u8>, Box<dyn std::error::Error>> {
         .start()?;
     let encoder = flate2::write::DeflateEncoder::new(&mut entry, flate2::Compression::default());
     let mut writer = config.wrap(encoder);
-    writer.write_all(b"the quick brown fox jumps over the lazy dog\n".repeat(64).as_slice())?;
+    writer.write_all(
+        b"the quick brown fox jumps over the lazy dog\n"
+            .repeat(64)
+            .as_slice(),
+    )?;
     let (encoder, desc) = writer.finish()?;
     encoder.finish()?;
     entry.finish(desc)?;

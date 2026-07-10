@@ -1925,8 +1925,8 @@ mod tests {
         assert_eq!(dst_dir.crc32(), src_crc);
         assert_eq!(dst_dir.uncompressed_size_hint(), src_uncompressed);
         let dst_local = dst_archive.get_entry(dst_dir.wayfinder()).unwrap();
-        let mut verifier = dst_local
-            .verifying_reader(flate2::bufread::DeflateDecoder::new(dst_local.data()));
+        let mut verifier =
+            dst_local.verifying_reader(flate2::bufread::DeflateDecoder::new(dst_local.data()));
         let mut actual = Vec::new();
         std::io::copy(&mut verifier, &mut actual).unwrap();
         assert_eq!(&actual, data);
