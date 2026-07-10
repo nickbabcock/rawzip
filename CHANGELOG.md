@@ -79,6 +79,7 @@ The reason is to prevent breaking changes in the future by properly modeling unk
 - Fix `ZipEntry::local_header` panic if underlying file content changes
 - Fix manual `UtcDateTime::from_unix` construction for negative Unix timestamps
 - Update display and debug implementations for `CompressionMethod`
+- Set the MS-DOS directory attribute in the external file attributes of written directory entries
 
 ## v0.4.4 - March 9th, 2026
 
