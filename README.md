@@ -1,103 +1,88 @@
 # Rawzip
 
-A low-level Zip archive reader and writer. Pure Rust. Zero dependencies. Zero unsafe. Fast.
+<!-- cargo-rdme start -->
 
-## Use Cases
+A low-level, composable Zip archive reader and writer.
 
-In its current state, rawzip should not be considered a general purpose Zip library like [zip](https://crates.io/crates/zip), [rc-zip](https://crates.io/crates/rc-zip), or [async_zip](https://crates.io/crates/async-zip). Instead, it was born out of a need for the following:
+## Features
 
-- **Efficiency**: Only pay for what you use. Rawzip does not materialize the central directory when a Zip archive is parsed, and instead provides a lending iterator through the listed Zip entries. For a Zip file with 200k entries, this results in up to 2 orders of magnitude performance increase, as other Zip libraries need 200k+ allocations to rawzip's 0. If storage of all entries is needed for further processing, callers are able to amortize allocations for arbitrary length fields like file names.
+- Pure Rust. Zero dependencies. Zero unsafe. [Untouchable performance](https://github.com/nickbabcock/rawzip#benchmarks).
+- Zip64 support (read and write archives with 100k+ entries, >100 GB archives, >5 GB entries)
+- Fan out streaming (de)compression across multiple threads
+- Zero-allocation streaming reader. In-memory reads are zero-copy and `no_std`
+- Bring the compression and strong encryption that fits your workload
+- Use the built-in CRC, entry integrity checks, and ZipCrypto, or swap in your own
 
-- **Bring your own dependencies**: Rawzip pushes the compression responsibility onto the caller. Rust has a myriad of high quality compression libraries to choose from. For instance, just deflate has a half dozen implementations ([#1](https://crates.io/crates/libdeflater), [#2](https://crates.io/crates/miniz_oxide), [#3](https://crates.io/crates/zune-inflate), [#4](https://crates.io/crates/libz-ng-sys), [#5](https://crates.io/crates/zlib-rs), [#6](https://crates.io/crates/cloudflare-zlib-sys)). This allows Rawzip to reach maturity easier and be passively maintained while letting downstream users pick the exact compressor best suited to their needs. The Zip file specification does not change frequently, and the hope is this library won't either.
+rawzip was born from the need for performance and choice. Other zip libraries materialize the central directory with an avalanche of allocations and tie one to a particular decompression implementation. rawzip does neither. There are half a dozen high-quality DEFLATE crates and several Zstandard crates. All have their uses, so users should be empowered to choose what makes sense. The Zip file specification does not change frequently, and the goal is that this library won't change frequently either.
 
-## Features:
+## Quickstart
 
-- Pure Rust. Zero dependencies. Zero unsafe. Fast.
-- Read and write Zip and large Zip64 archives (100k+ entries, >100 GB archives, >5 GB entry)
-- Facilitates concurrent streaming decompression
-- Zero allocation and zero copy when reading from a byte slice
+A round-trip: write a DEFLATE-compressed `file.txt`, then read it back. rawzip
+handles the archive structure, while you provide compression (here [`flate2`]), unlike other batteries-included libraries such as [zip](https://crates.io/crates/zip), [rc-zip](https://crates.io/crates/rc-zip), or [async_zip](https://crates.io/crates/async-zip).
 
-## Example
+The main entrypoints:
+
+- [`ZipArchive::from_file`](https://docs.rs/rawzip/latest/rawzip/archive/struct.ZipArchive.html#method.from_file) - zero-allocation streaming reader
+- [`ZipArchive::from_slice`](https://docs.rs/rawzip/latest/rawzip/archive/struct.ZipArchive.html#method.from_slice) - zero-copy, `no_std` reader
+- [`ZipArchiveWriter::new`](https://docs.rs/rawzip/latest/rawzip/writer/struct.ZipArchiveWriter.html#method.new)
 
 ```rust
 use std::io::Read;
 
-// Let's create a Zip archive with a single file, "file.txt", containing the text "Hello, world!"
-// and read it back out.
 let data = b"Hello, world!";
 
-// Create a new Zip archive in memory.
+// Create a new zip archive around a `Write` implementation.
 let mut output = Vec::new();
 let mut archive = rawzip::ZipArchiveWriter::new(&mut output);
 
-// Start of a new file in our zip archive with deflate compression.
+// Declare the entry, then point your compressor at it. `config.wrap` tracks the
+// uncompressed size and CRC that the Zip data descriptor needs.
 let (mut entry, config) = archive.new_file("file.txt")
     .compression_method(rawzip::CompressionMethod::DEFLATE)
     .start()?;
-
-// Create the deflate compressor
 let encoder = flate2::write::DeflateEncoder::new(&mut entry, flate2::Compression::default());
-
-// Wrap the compressor in a data writer, which will track information for the
-// Zip data descriptor (like uncompressed size and crc).
 let mut writer = config.wrap(encoder);
-
-// Copy the data to the writer.
 std::io::copy(&mut &data[..], &mut writer)?;
 
-// Finish the file, which will return the finalized data descriptor
-let (_, descriptor) = writer.finish()?;
-
-// Write out the data descriptor and return a description of the written entry.
-let written_entry = entry.finish(descriptor)?;
-let compressed = written_entry.compressed_size();
-
-// Finish the archive, which will write the central directory.
+// Unwind the layers, then write the central directory.
+let (encoder, descriptor) = writer.finish()?;
+encoder.finish()?;
+entry.finish(descriptor)?;
 archive.finish()?;
 
-// Now it is time to read back what we've written! Here we are reading from
-// a slice, but there's another set of API that take advantage of reading from a file.
+// --- It's reading time! --- We're reading from a slice for brevity
 let archive = rawzip::ZipArchive::from_slice(&output)?;
-
-// Rawzip does not materialize the central directory when a Zip archive is parsed,
-// so we need to iterate over the entries to find the one we want.
 let mut entries = archive.entries();
-
-// Get the first (and only) entry in the archive.
 let entry = entries.next_entry()?.unwrap();
 
-// While we can access the raw bytes of the file name, let's use the normalized path
-// for demonstration purposes.
+// Demonstrate normalizing file paths to avoid Zip Slip vulnerabilities.
 assert_eq!(entry.file_path().try_normalize()?.as_ref(), "file.txt");
-
-// Assert the compression method.
 assert_eq!(entry.compression_method(), rawzip::CompressionMethod::DEFLATE);
 
-// Assert the uncompressed size hint. Be warned that this may not be the actual,
-// uncompressed size for malicious or corrupted files.
-assert_eq!(entry.uncompressed_size_hint(), data.len() as u64);
-
-// Before we need to access the entry's data, we need to know where it is in the archive.
-let wayfinder = entry.wayfinder();
-
-let local_entry = archive.get_entry(wayfinder)?;
-
-let mut actual = Vec::new();
+// A wayfinder locates the entry's data within the archive.
+let local_entry = archive.get_entry(entry.wayfinder())?;
 let decompressor = flate2::bufread::DeflateDecoder::new(local_entry.data());
 
-// We wrap the decompressor in a verifying reader, which will verify the size and CRC of
-// the decompressed data once finished.
-let mut reader = local_entry.verifying_reader(decompressor);
-std::io::copy(&mut reader, &mut actual)?;
-
-// Assert the data is what we wrote.
+// A verifying reader checks the decompressed size and CRC as you read.
+let mut actual = Vec::new();
+local_entry.verifying_reader(decompressor).read_to_end(&mut actual)?;
 assert_eq!(&data[..], actual);
-Ok::<(), Box<dyn std::error::Error>>(())
 ```
+
+## Guide
+
+There's quite a bit of depth to ZIP archives, so jump into the desired section.
+
+1. [Reading](https://docs.rs/rawzip/latest/rawzip/guide/reading/)
+2. [Performance](https://docs.rs/rawzip/latest/rawzip/guide/performance/): Dial in performance with custom CRC, dependencies, and parallel processing
+3. [Validation](https://docs.rs/rawzip/latest/rawzip/guide/validation/): Create a custom entity integrity policy
+4. [Encryption](https://docs.rs/rawzip/latest/rawzip/guide/encryption/): WinZip AES and ZipCrypto
+
+[`flate2`]: https://crates.io/crates/flate2
 
 ## Security
 
-Zip files have a checkered past with maliciously crafted zips causing major headaches.
+Zip files have a checkered past, with maliciously crafted zips causing major headaches.
 
 By virtue of rawzip being a minimal library, several mitigations become the responsibility of the consuming application.
 
@@ -105,16 +90,20 @@ What rawzip provides:
 
 - Memory safety
 - Structural validation of EOCD, central directory, and local file headers
-- An opt-in file path normalization to protect against zip slips
+- Opt-in file path normalization to protect against Zip Slip vulnerabilities
 - An opt-in CRC and size verification of inflated data
 
 What consumers must handle:
 
-- Zip bombs by implementing max compression ratios, max file sizes, and checks for overlapping file data
+- Zip bombs by implementing maximum compression ratios, maximum file sizes, and checks for overlapping file data
 - Symlink attacks with safe file system operations
 - Zip quines and potentially infinite recursion by limiting the amount of nesting
 - Multiple file entries with the same file name
 - Unexpected central directory entry count. When the central directory iterator ends or errors, check against the number of expected entries to know whether an error should be raised or suppressed.
+
+See the [extractor example](https://github.com/nickbabcock/rawzip/blob/master/examples/extract.rs) for a practical starting point that applies several of these mitigations.
+
+<!-- cargo-rdme end -->
 
 ## Benchmarks
 

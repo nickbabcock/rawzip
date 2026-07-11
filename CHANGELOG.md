@@ -1,8 +1,8 @@
-## Unreleased
+## v0.5.0 - July 11th, 2026
 
 > Oh boy, look how big the changelog is. Surely, this library has lost its way.
 
-The good news is that the breaking changes are minimal or esoteric and rawzip is still the same low-level, lean, BYO-dependencies that you know and love. The goal for 0.5 has been a focus on correctness and exposing the foundation to be built ontop of for years to come. This includes exposing primitives to allow reading and writing encrypts zips, both ZipCrypto and WinZip AES (again, without dependencies).
+The good news is that the breaking changes are minimal or esoteric and rawzip is still the same low-level, lean, BYO-dependencies that you know and love. The goal for 0.5 has been a focus on correctness and exposing the foundation to be built ontop of for years to come. This includes exposing primitives to allow reading and writing encrypted, both ZipCrypto and WinZip AES (again, without dependencies).
 
 The most visible change will be the deprecation of the enum:
 
