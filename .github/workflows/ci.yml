@@ -131,6 +131,22 @@ jobs:
       run: |
         cargo fmt --all -- --check
 
+  docs:
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v7
+    - name: Install Rust
+      uses: dtolnay/rust-toolchain@master
+      with:
+        toolchain: stable
+    - name: Install cargo-rdme
+      run: cargo install cargo-rdme
+    - name: Install Rust toolchain for intralinks
+      run: cargo rdme install-rust-toolchain-for-intralinks
+    - name: Check README is generated from crate docs
+      run: cargo rdme --check --heading-base-level 0
+
   fuzz:
     runs-on: ubuntu-latest
     steps:
