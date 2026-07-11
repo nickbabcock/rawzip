@@ -436,7 +436,7 @@ impl ZipFilePath<NormalizedPathBuf> {
 /// # Examples
 ///
 /// ```rust
-/// use rawzip::EntryPath;
+/// use rawzip::path::EntryPath;
 ///
 /// // A UTF-8 path, normalized on write.
 /// let path = EntryPath::conformant("docs/readme.txt");

@@ -1,4 +1,5 @@
-use rawzip::{EntryPath, ZipArchive, ZipArchiveWriter};
+use rawzip::path::EntryPath;
+use rawzip::{ZipArchive, ZipArchiveWriter};
 use std::io::Write;
 
 /// Writes one file and returns the archive.
