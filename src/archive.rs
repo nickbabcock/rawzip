@@ -161,7 +161,7 @@ impl<T: AsRef<[u8]>> ZipSliceArchive<T> {
     ///
     /// This is only needed for `AsRef<[u8]>` types that do not themselves
     /// implement [`ReaderAt`], such as a memory-mapped file (`memmap2::Mmap`).
-    /// Otherwise prefer the zero-cost [`ZipSliceArchive::into_reader`].
+    /// Otherwise prefer the zero-cost [`ZipSliceArchive::into_reader_archive`].
     #[cfg(feature = "std")]
     pub fn into_cursor_archive(self) -> ZipArchive<std::io::Cursor<T>> {
         ZipArchive {

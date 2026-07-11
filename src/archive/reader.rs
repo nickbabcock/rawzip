@@ -257,8 +257,10 @@ impl<T: ReaderAt> ZipSliceArchive<T> {
     ///
     /// This is useful for unifying code that might handle both slice-based and
     /// reader-based archives. Because the underlying data already implements
-    /// [`ReaderAt`], the conversion is zero-cost.
-    pub fn into_reader(self) -> ZipArchive<T> {
+    /// [`ReaderAt`], the conversion is zero-cost. For `AsRef<[u8]>` types that
+    /// do not implement [`ReaderAt`], use
+    /// [`ZipSliceArchive::into_cursor_archive`] instead.
+    pub fn into_reader_archive(self) -> ZipArchive<T> {
         ZipArchive::from(self)
     }
 }

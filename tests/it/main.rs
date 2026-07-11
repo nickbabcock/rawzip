@@ -880,10 +880,10 @@ fn zip_integration_tests_vec() {
     let data = std::fs::read("assets/zip64.zip").unwrap();
 
     // `Vec<u8>` implements `ReaderAt`, so it can be converted directly without a
-    // `Cursor` wrapper, both via `into_reader` and the `From`/`Into` impls.
+    // `Cursor` wrapper, both via `into_reader_archive` and the `From`/`Into` impls.
     let archive = rawzip::ZipArchive::from_slice(data.clone()).unwrap();
     assert_eq!(archive.comment().as_bytes(), b"");
-    let reader: rawzip::ZipArchive<Vec<u8>> = archive.into_reader();
+    let reader: rawzip::ZipArchive<Vec<u8>> = archive.into_reader_archive();
     assert_entry_count(reader, 1);
 
     let archive = rawzip::ZipArchive::from_slice(data).unwrap();
@@ -1185,7 +1185,7 @@ fn test_local_header_declared_fields_match_central_directory() {
     );
     assert_eq!(slice_local_header.last_modified(), entry.last_modified());
 
-    let reader_archive = ZipArchive::from_slice(&data).unwrap().into_reader();
+    let reader_archive = ZipArchive::from_slice(&data).unwrap().into_reader_archive();
     let mut buffer = vec![0u8; rawzip::RECOMMENDED_BUFFER_SIZE];
     let mut reader_entries = reader_archive.entries(&mut buffer);
     let reader_entry = reader_entries.next_entry().unwrap().unwrap();
@@ -1242,7 +1242,9 @@ fn reader_local_header_returns_error_when_reread_diverges() {
         local_header_offset,
         local_header_reads: Cell::new(0),
     };
-    let reader_archive = ZipArchive::from_slice(divergent).unwrap().into_reader();
+    let reader_archive = ZipArchive::from_slice(divergent)
+        .unwrap()
+        .into_reader_archive();
     let mut buffer = vec![0u8; rawzip::RECOMMENDED_BUFFER_SIZE];
     let mut entries = reader_archive.entries(&mut buffer);
     let entry_header = entries.next_entry().unwrap().unwrap();
