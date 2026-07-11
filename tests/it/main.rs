@@ -1011,8 +1011,8 @@ fn test_read_what_we_write_slice(data: Vec<u8>) {
         std::io::copy(&mut Cursor::new(&data), &mut writer).unwrap();
         let (_, descriptor) = writer.finish().unwrap();
         assert_eq!(descriptor.uncompressed_size(), data.len() as u64);
-        let compressed = entry.finish(descriptor).unwrap();
-        assert_eq!(compressed, data.len() as u64);
+        let written_entry = entry.finish(descriptor).unwrap();
+        assert_eq!(written_entry.compressed_size(), data.len() as u64);
         archive.finish().unwrap();
     }
 

@@ -38,6 +38,8 @@ The reason is to prevent breaking changes in the future by properly modeling unk
 - Seal `TimeZoneMarker` trait
 - Remove deprecated `ZipFileBuilder::create`
 - Change `ErrorKind::BufferTooSmall` to carry the required buffer capacity
+- `ZipEntryWriter::finish` now returns a `WrittenZipEntry` instead of only compressed byte count.
+- `ZipDirBuilder::create` now returns a `WrittenZipEntry` instead of `()`.
 
 ### Performance
 
