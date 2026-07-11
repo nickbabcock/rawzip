@@ -37,8 +37,6 @@ pub use headers::EntryFlags;
 pub use headers::Header;
 pub use locator::*;
 pub use mode::{CreatorSystem, EntryMode, VersionMadeBy};
-#[cfg(feature = "alloc")]
-pub use path::EntryPath;
 #[cfg(feature = "std")]
 pub use reader_at::{FileReader, RangeReader, ReaderAt};
 #[cfg(feature = "std")]
