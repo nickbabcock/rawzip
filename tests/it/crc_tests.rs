@@ -110,7 +110,7 @@ fn slice_verifying_reader() {
 #[test]
 fn reader_imperative_claim_verifier() {
     let data = build_deflate_zip(CONTENT);
-    let archive = ZipArchive::from_slice(&data).unwrap().into_reader();
+    let archive = ZipArchive::from_slice(&data).unwrap().into_reader_archive();
     let wayfinder = first_wayfinder(&archive);
     let ent = archive.get_entry(wayfinder).unwrap();
 
@@ -131,7 +131,7 @@ fn reader_imperative_claim_verifier() {
 #[test]
 fn reader_verifying_reader() {
     let data = build_deflate_zip(CONTENT);
-    let archive = ZipArchive::from_slice(&data).unwrap().into_reader();
+    let archive = ZipArchive::from_slice(&data).unwrap().into_reader_archive();
     let wayfinder = first_wayfinder(&archive);
     let ent = archive.get_entry(wayfinder).unwrap();
 
@@ -228,7 +228,7 @@ impl<R: ReaderAt, C: Checksum> Read for CustomCrcVerifier<R, C> {
 
 fn run_custom_crc_verifier_eof<C: Checksum>(crc: C) {
     let data = build_deflate_zip(CONTENT);
-    let archive = ZipArchive::from_slice(&data).unwrap().into_reader();
+    let archive = ZipArchive::from_slice(&data).unwrap().into_reader_archive();
     let wayfinder = first_wayfinder(&archive);
     let ent = archive.get_entry(wayfinder).unwrap();
     let mut verifier = CustomCrcVerifier::new(ent.reader(), crc);
@@ -268,7 +268,7 @@ fn corrupt_central_crc_rejected() {
     assert_invalid_checksum(err, corrupted, original);
 
     // Reader verifier.
-    let archive = ZipArchive::from_slice(&data).unwrap().into_reader();
+    let archive = ZipArchive::from_slice(&data).unwrap().into_reader_archive();
     let wayfinder = first_wayfinder(&archive);
     let ent = archive.get_entry(wayfinder).unwrap();
     let verifier = ent.verifying_reader(DeflateDecoder::new(ent.reader()));
@@ -309,7 +309,7 @@ fn data_descriptor_present_for_streamed_entry() {
     assert_eq!(dd.uncompressed_size(), central_uncompressed);
 
     // Reader path.
-    let archive = ZipArchive::from_slice(&data).unwrap().into_reader();
+    let archive = ZipArchive::from_slice(&data).unwrap().into_reader_archive();
     let wayfinder = first_wayfinder(&archive);
     let ent = archive.get_entry(wayfinder).unwrap();
     let reader = ent.reader();
@@ -334,7 +334,7 @@ fn data_descriptor_absent_for_non_streamed_entry() {
     assert!(ent.data_descriptor().unwrap().is_none());
 
     // Reader path.
-    let archive = ZipArchive::from_slice(&data).unwrap().into_reader();
+    let archive = ZipArchive::from_slice(&data).unwrap().into_reader_archive();
     let wayfinder = first_wayfinder(&archive);
     let ent = archive.get_entry(wayfinder).unwrap();
     let reader = ent.reader();
@@ -423,7 +423,7 @@ fn descriptor_cross_check_rejects_descriptor_divergence() {
     let read_limit = CONTENT.len() as u64 + 1;
 
     // The default verifying_reader keys off the central directory and succeeds.
-    let archive = ZipArchive::from_slice(&data).unwrap().into_reader();
+    let archive = ZipArchive::from_slice(&data).unwrap().into_reader_archive();
     let wayfinder = first_wayfinder(&archive);
     let ent = archive.get_entry(wayfinder).unwrap();
     let verifier = ent.verifying_reader(DeflateDecoder::new(ent.reader()));
@@ -461,7 +461,7 @@ fn descriptor_cross_check_rejects_size_divergence() {
 
     // The default verifying_reader keys off the central directory (and never
     // consults the descriptor sizes), so it succeeds despite the corruption.
-    let archive = ZipArchive::from_slice(&data).unwrap().into_reader();
+    let archive = ZipArchive::from_slice(&data).unwrap().into_reader_archive();
     let wayfinder = first_wayfinder(&archive);
     let ent = archive.get_entry(wayfinder).unwrap();
     let verifier = ent.verifying_reader(DeflateDecoder::new(ent.reader()));

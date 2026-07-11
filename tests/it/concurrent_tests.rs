@@ -67,7 +67,7 @@ fn reader_api_decompresses_entries_in_parallel() {
     let data = build_two_entry_deflate_zip();
     let archive = ZipArchive::from_slice(data.as_slice())
         .unwrap()
-        .into_reader();
+        .into_reader_archive();
 
     let barrier = Arc::new(Barrier::new(2));
     let expected = [FIRST_CONTENT, SECOND_CONTENT];
