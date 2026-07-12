@@ -202,8 +202,6 @@ impl ZipLocator {
             }
         };
 
-        let has_zip64_sentinel = eocd.has_zip64_sentinel();
-
         end_of_central_directory =
             &end_of_central_directory[EndOfCentralDirectoryRecordFixed::SIZE..];
 
@@ -225,17 +223,11 @@ impl ZipLocator {
         }
 
         let eocd = EndOfCentralDirectoryRecord::from_parts(eocd_offset, eocd);
-        if !has_zip64_sentinel {
-            return match EndOfCentralDirectory::create(eocd) {
-                Ok(eocd) => Ok((reader.inner, eocd)),
-                Err(e) => Err((reader.inner, e)),
-            };
-        }
 
         let eocd64l_size = Zip64EndOfCentralDirectoryLocatorRecord::SIZE;
 
-        // A sentinel EOCD field only hints at zip64. We need to support classic
-        // zips with 65535 entries.
+        // Always probe for a zip64 EOCD locator, which can be present
+        // even if a sentinel wasn't present.
         if (eocd64l_size as u64) > eocd_offset {
             return match EndOfCentralDirectory::create(eocd) {
                 Ok(eocd) => Ok((reader.inner, eocd)),

@@ -69,22 +69,21 @@ fn extract_zip_archive<P: AsRef<std::path::Path>>(
             Ok(Some(entry)) => entry,
             Ok(None) => break,
             Err(e) => {
-                // When an error is encountered, if we have processed the
-                // expected number of entries, we treat this as reaching the end
-                // rather than an error. For the vast majority of zips, this is
-                // not necessary but is included for completeness.
-                if entries_processed == expected_entries {
-                    break;
-                } else {
-                    return Err(ExtractionError::zip_context(
-                        e,
-                        "Failed to read ZIP entry".to_string(),
-                    ));
-                }
+                return Err(ExtractionError::zip_context(
+                    e,
+                    "Failed to read ZIP entry".to_string(),
+                ));
             }
         };
 
         entries_processed += 1;
+        if entries_processed > expected_entries {
+            return Err(ExtractionError::EntryCountMismatch {
+                expected: expected_entries,
+                actual: entries_processed,
+            });
+        }
+
         let raw_path = entry.file_path();
 
         // Avoid zip slips by normalizing the path. Note that it is not required for
@@ -335,6 +334,13 @@ fn extract_zip_archive<P: AsRef<std::path::Path>>(
         }
     }
 
+    if entries_processed != expected_entries {
+        return Err(ExtractionError::EntryCountMismatch {
+            expected: expected_entries,
+            actual: entries_processed,
+        });
+    }
+
     if zip_start_offset > 0 {
         println!("ZIP starting offset: {zip_start_offset}");
     }
@@ -352,6 +358,10 @@ enum ExtractionError {
         error: std::io::Error,
         context: String,
     },
+    EntryCountMismatch {
+        expected: u64,
+        actual: u64,
+    },
 }
 
 impl std::fmt::Display for ExtractionError {
@@ -363,6 +373,10 @@ impl std::fmt::Display for ExtractionError {
             ExtractionError::IoError { error, context } => {
                 write!(f, "{context}: {error}")
             }
+            ExtractionError::EntryCountMismatch { expected, actual } => write!(
+                f,
+                "central directory contains {actual} entries, but the EOCD declares {expected}"
+            ),
         }
     }
 }
@@ -372,6 +386,7 @@ impl std::error::Error for ExtractionError {
         match self {
             ExtractionError::ZipError { error, .. } => Some(error),
             ExtractionError::IoError { error, .. } => Some(error),
+            ExtractionError::EntryCountMismatch { .. } => None,
         }
     }
 }
