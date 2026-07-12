@@ -97,6 +97,18 @@ fn read_zip64_from_cd_size_sentinel() {
     verify_expected_entries(&data, 2);
 }
 
+// Zip64 without sentinels present
+//
+// ```
+// printf x | zip -q missing-zip64-sentinels.zip -
+// ```
+#[test]
+fn read_zip64_missing_classic_sentinels() {
+    let data = std::fs::read("assets/missing-zip64-sentinels.zip").unwrap();
+    assert!(contains_zip64_signatures(&data));
+    verify_expected_entries(&data, 1);
+}
+
 fn is_all_zero(buf: &[u8]) -> bool {
     const ZEROS: [u8; 256] = [0u8; 256];
     let mut chunks = buf.chunks_exact(ZEROS.len());

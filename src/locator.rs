@@ -103,7 +103,6 @@ impl ZipLocator {
         location: usize,
     ) -> Result<EndOfCentralDirectory, Error> {
         let eocd = EndOfCentralDirectoryRecordFixed::parse(&data[location..])?;
-        let has_zip64_sentinel = eocd.has_zip64_sentinel();
         let eocd = EndOfCentralDirectoryRecord::from_parts(location as u64, eocd);
 
         // Validate comment is completely present in the slice
@@ -113,12 +112,8 @@ impl ZipLocator {
             return Err(Error::from(ErrorKind::Eof));
         }
 
-        if !has_zip64_sentinel {
-            return EndOfCentralDirectory::create(eocd);
-        }
-
-        // A sentinel EOCD field only hints at zip64. We need to support classic
-        // zips with 65535 entries.
+        // Always probe for a zip64 EOCD locator, which can be present
+        // even if a sentinel wasn't present.
         let zip64_locator = location
             .checked_sub(Zip64EndOfCentralDirectoryLocatorRecord::SIZE)
             .and_then(|start| Zip64EndOfCentralDirectoryLocatorRecord::parse(&data[start..]).ok());
@@ -306,6 +301,7 @@ pub(crate) struct EndOfCentralDirectoryRecordFixed {
     pub(crate) disk_number: u16,
     #[allow(dead_code)]
     pub(crate) eocd_disk: u16,
+    #[allow(dead_code)]
     pub(crate) num_entries: u16,
     pub(crate) total_entries: u16,
     pub(crate) central_dir_size: u32,
@@ -339,14 +335,6 @@ impl EndOfCentralDirectoryRecordFixed {
         }
 
         Ok(result)
-    }
-
-    /// If true, a zip64 record *may* be present.
-    pub fn has_zip64_sentinel(&self) -> bool {
-        self.num_entries == u16::MAX        // 4.4.21
-            || self.total_entries == u16::MAX   // 4.4.22
-            || self.central_dir_size == u32::MAX // 4.4.23
-            || self.central_dir_offset == u32::MAX // 4.4.24
     }
 }
 

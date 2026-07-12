@@ -36,19 +36,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let expected_entries = archive.entries_hint();
 
     let mut entries = archive.entries(&mut buffer);
-    loop {
-        let entry = match entries.next_entry() {
-            Ok(Some(entry)) => entry,
-            Ok(None) => break,
-            Err(e) => {
-                if file_count == expected_entries {
-                    break;
-                } else {
-                    return Err(e.into());
-                }
-            }
-        };
-
+    while let Some(entry) = entries.next_entry()? {
         let uncompressed_size = entry.uncompressed_size_hint();
         let compressed_size = entry.compressed_size_hint();
 
@@ -81,6 +69,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!(
         "{total_uncompressed:9}                                             {file_count} files"
     );
+
+    if file_count != expected_entries {
+        eprintln!(
+            "warning: central directory contains {file_count} entries, but the EOCD declares {expected_entries}"
+        );
+    }
 
     if total_compressed > 0 && total_uncompressed > 0 {
         let compression_ratio = (total_compressed as f64 / total_uncompressed as f64) * 100.0;
