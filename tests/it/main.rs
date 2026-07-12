@@ -1456,7 +1456,8 @@ fn reader_parses_nameless_entry_at_boundary() {
     writer.finish().unwrap();
 
     let slice = ZipArchive::from_slice(&data).unwrap();
-    assert_eq!(slice.entries().count(), 2);
+    let entries = slice.entries().collect::<Result<Vec<_>, _>>().unwrap();
+    assert_eq!(entries.len(), 2);
 
     let mut locator_buffer = vec![0; rawzip::RECOMMENDED_BUFFER_SIZE];
     let reader = rawzip::ZipLocator::new()
@@ -1466,4 +1467,42 @@ fn reader_parses_nameless_entry_at_boundary() {
     let mut entries = reader.entries(&mut entry_buffer);
     assert!(entries.next_entry().unwrap().is_some());
     assert!(entries.next_entry().unwrap().is_some());
+}
+
+#[test]
+fn trailing_central_directory_byte_is_eof() {
+    let mut data = Vec::new();
+    let mut writer = ZipArchiveWriter::new(&mut data);
+    let (entry, config) = writer.new_file("hello.txt").start().unwrap();
+    let (entry, descriptor) = config.wrap(entry).finish().unwrap();
+    entry.finish(descriptor).unwrap();
+    writer.finish().unwrap();
+
+    let archive = ZipArchive::from_slice(&data).unwrap();
+    let eocd_offset = archive.eocd_offset() as usize;
+
+    data.insert(eocd_offset, 0);
+    const EOCD_CENTRAL_DIRECTORY_SIZE_OFFSET: usize = 12;
+    let size_offset = eocd_offset + 1 + EOCD_CENTRAL_DIRECTORY_SIZE_OFFSET;
+    let size = u32::from_le_bytes(data[size_offset..][..4].try_into().unwrap());
+    data[size_offset..][..4].copy_from_slice(&(size + 1).to_le_bytes());
+
+    let slice = ZipArchive::from_slice(&data).unwrap();
+    let mut slice_entries = slice.entries();
+    assert!(slice_entries.next_entry().unwrap().is_some());
+    assert!(matches!(
+        slice_entries.next_entry().unwrap_err().kind(),
+        ErrorKind::Eof
+    ));
+
+    let mut buffer = vec![0; rawzip::MAX_CENTRAL_DIRECTORY_RECORD_SIZE];
+    let reader = rawzip::ZipLocator::new()
+        .locate_in_reader(data.as_slice(), &mut buffer, data.len() as u64)
+        .unwrap();
+    let mut reader_entries = reader.entries(&mut buffer);
+    assert!(reader_entries.next_entry().unwrap().is_some());
+    assert!(matches!(
+        reader_entries.next_entry().unwrap_err().kind(),
+        ErrorKind::Eof
+    ));
 }
