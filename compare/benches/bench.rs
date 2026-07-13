@@ -1,7 +1,7 @@
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use rawzip::extra_fields::ExtraFieldId;
 use std::hint::black_box;
-use std::io::{Cursor, Write};
+use std::io::{Cursor, Read, Write};
 
 /// Number of entries in the archive walked by the read benchmarks.
 const READ_ENTRIES: usize = 100_000;
@@ -151,6 +151,7 @@ fn extract_benchmarks(c: &mut Criterion) {
 
         group.bench_function(BenchmarkId::new("rawzip_reader", label), |b| {
             let mut buffer = vec![0u8; rawzip::RECOMMENDED_BUFFER_SIZE];
+            let mut scratch = vec![0u8; 8192];
             b.iter(|| {
                 let archive = rawzip::ZipLocator::new()
                     .locate_in_reader(zip_data.as_slice(), &mut buffer, zip_data.len() as u64)
@@ -161,7 +162,13 @@ fn extract_benchmarks(c: &mut Criterion) {
                     let zip_entry = archive.get_entry(entry.wayfinder()).unwrap();
                     let reader = zip_entry.reader();
                     let mut verifier = zip_entry.verifying_reader(reader);
-                    bytes += std::io::copy(&mut verifier, &mut std::io::sink()).unwrap();
+                    loop {
+                        let read = verifier.read(&mut scratch).unwrap();
+                        if read == 0 {
+                            break;
+                        }
+                        bytes += read as u64;
+                    }
                     if !take_all {
                         break;
                     }
@@ -173,6 +180,7 @@ fn extract_benchmarks(c: &mut Criterion) {
         // zip: eager open builds the whole index, then each entry is extracted
         // by position.
         group.bench_function(BenchmarkId::new("zip", label), |b| {
+            let mut scratch = vec![0u8; 8192];
             b.iter(|| {
                 let cursor = Cursor::new(&zip_data);
                 let mut archive = zip::ZipArchive::new(cursor).unwrap();
@@ -180,7 +188,13 @@ fn extract_benchmarks(c: &mut Criterion) {
                 let mut bytes = 0u64;
                 for i in 0..n {
                     let mut file = archive.by_index(i).unwrap();
-                    bytes += std::io::copy(&mut file, &mut std::io::sink()).unwrap();
+                    loop {
+                        let read = file.read(&mut scratch).unwrap();
+                        if read == 0 {
+                            break;
+                        }
+                        bytes += read as u64;
+                    }
                 }
                 black_box(bytes)
             })
@@ -188,6 +202,7 @@ fn extract_benchmarks(c: &mut Criterion) {
 
         // rc_zip: eager open, then each entry is read from the parsed list.
         group.bench_function(BenchmarkId::new("rc_zip", label), |b| {
+            let mut scratch = vec![0u8; 8192];
             b.iter(|| {
                 use rc_zip_sync::ReadZip;
                 let slice = zip_data.as_slice();
@@ -195,7 +210,14 @@ fn extract_benchmarks(c: &mut Criterion) {
                 let n = if take_all { usize::MAX } else { 1 };
                 let mut bytes = 0u64;
                 for handle in reader.entries().take(n) {
-                    bytes += handle.bytes().unwrap().len() as u64;
+                    let mut entry_reader = handle.reader();
+                    loop {
+                        let read = entry_reader.read(&mut scratch).unwrap();
+                        if read == 0 {
+                            break;
+                        }
+                        bytes += read as u64;
+                    }
                 }
                 black_box(bytes)
             })

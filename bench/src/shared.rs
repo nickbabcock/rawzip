@@ -1,5 +1,5 @@
 use rawzip::{ReaderAt, ZipArchive, ZipArchiveWriter, ZipSliceArchive, time::UtcDateTime};
-use std::io::{Cursor, Write};
+use std::io::{Cursor, Read, Write};
 
 pub(crate) const SIZE_CASES: [usize; 9] = [1, 4, 16, 64, 256, 1024, 4096, 16384, 65536];
 pub(crate) const LARGE_ENTRY_COUNT: usize = 200_000;
@@ -153,12 +153,19 @@ pub fn extract_first_reader<R: ReaderAt>(archive: &ZipArchive<R>, buffer: &mut [
 /// Extract every entry through the reader API, parsing and verifying each one.
 pub fn extract_all_reader<R: ReaderAt>(archive: &ZipArchive<R>, buffer: &mut [u8]) -> u64 {
     let mut bytes = 0u64;
+    let mut scratch = [0u8; 8192];
     let mut entries = archive.entries(buffer);
     while let Ok(Some(entry)) = entries.next_entry() {
         let zip_entry = archive.get_entry(entry.wayfinder()).unwrap();
         let reader = zip_entry.reader();
         let mut verifier = zip_entry.verifying_reader(reader);
-        bytes += std::io::copy(&mut verifier, &mut std::io::sink()).unwrap();
+        loop {
+            let read = verifier.read(&mut scratch).unwrap();
+            if read == 0 {
+                break;
+            }
+            bytes += read as u64;
+        }
     }
     bytes
 }
