@@ -535,7 +535,11 @@ where
     pub fn next_entry(&mut self) -> Result<Option<ZipFileHeaderRecord<'_>>, Error> {
         if self.pos + ZipFileHeaderFixed::SIZE > self.end {
             if self.offset >= self.central_dir_end_pos {
-                return Ok(None);
+                return if self.pos == self.end {
+                    Ok(None)
+                } else {
+                    Err(Error::from(ErrorKind::Eof))
+                };
             }
 
             let remaining = self.end - self.pos;
