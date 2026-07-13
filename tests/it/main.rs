@@ -1506,3 +1506,32 @@ fn trailing_central_directory_byte_is_eof() {
         ErrorKind::Eof
     ));
 }
+
+#[test]
+fn iterates_past_undercounted_eocd() {
+    let data = std::fs::read("assets/eocd-undercount.zip").unwrap();
+
+    let archive = ZipArchive::from_slice(&data).unwrap();
+    assert_eq!(archive.entries_hint(), 2);
+    assert_eq!(
+        archive
+            .entries()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap()
+            .len(),
+        3
+    );
+
+    let mut buffer = vec![0; rawzip::RECOMMENDED_BUFFER_SIZE];
+    let archive = rawzip::ZipLocator::new()
+        .locate_in_reader(data.as_slice(), &mut buffer, data.len() as u64)
+        .unwrap();
+    assert_eq!(archive.entries_hint(), 2);
+
+    let mut actual = 0;
+    let mut entries = archive.entries(&mut buffer);
+    while entries.next_entry().unwrap().is_some() {
+        actual += 1;
+    }
+    assert_eq!(actual, 3);
+}
