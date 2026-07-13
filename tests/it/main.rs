@@ -1441,3 +1441,29 @@ fn entry_overrunning_central_directory_is_eof() {
     let err = entries.next_entry().unwrap_err();
     assert!(matches!(err.kind(), rawzip::ErrorKind::Eof));
 }
+
+#[test]
+fn reader_parses_nameless_entry_at_boundary() {
+    const CENTRAL_DIRECTORY_HEADER_SIZE: usize = 46;
+
+    let mut data = Vec::new();
+    let mut writer = ZipArchiveWriter::new(&mut data);
+    for _ in 0..2 {
+        let (entry, config) = writer.new_file("").start().unwrap();
+        let (entry, descriptor) = config.wrap(entry).finish().unwrap();
+        entry.finish(descriptor).unwrap();
+    }
+    writer.finish().unwrap();
+
+    let slice = ZipArchive::from_slice(&data).unwrap();
+    assert_eq!(slice.entries().count(), 2);
+
+    let mut locator_buffer = vec![0; rawzip::RECOMMENDED_BUFFER_SIZE];
+    let reader = rawzip::ZipLocator::new()
+        .locate_in_reader(data.as_slice(), &mut locator_buffer, data.len() as u64)
+        .unwrap();
+    let mut entry_buffer = [0; CENTRAL_DIRECTORY_HEADER_SIZE * 2];
+    let mut entries = reader.entries(&mut entry_buffer);
+    assert!(entries.next_entry().unwrap().is_some());
+    assert!(entries.next_entry().unwrap().is_some());
+}

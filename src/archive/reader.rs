@@ -533,7 +533,7 @@ where
     /// buffer to parse entry headers.
     #[inline]
     pub fn next_entry(&mut self) -> Result<Option<ZipFileHeaderRecord<'_>>, Error> {
-        if self.pos + ZipFileHeaderFixed::SIZE >= self.end {
+        if self.pos + ZipFileHeaderFixed::SIZE > self.end {
             if self.offset >= self.central_dir_end_pos {
                 return Ok(None);
             }
