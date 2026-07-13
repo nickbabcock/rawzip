@@ -103,7 +103,6 @@ impl ZipLocator {
         location: usize,
     ) -> Result<EndOfCentralDirectory, Error> {
         let eocd = EndOfCentralDirectoryRecordFixed::parse(&data[location..])?;
-        let eocd = EndOfCentralDirectoryRecord::from_parts(location as u64, eocd);
 
         // Validate comment is completely present in the slice
         let comment_start = location + EndOfCentralDirectoryRecordFixed::SIZE;
@@ -112,21 +111,37 @@ impl ZipLocator {
             return Err(Error::from(ErrorKind::Eof));
         }
 
-        // Always probe for a zip64 EOCD locator, which can be present
-        // even if a sentinel wasn't present.
+        // Always probe for a zip64 EOCD locator, which can be present without sentinels
         let zip64_locator = location
             .checked_sub(Zip64EndOfCentralDirectoryLocatorRecord::SIZE)
             .and_then(|start| Zip64EndOfCentralDirectoryLocatorRecord::parse(&data[start..]).ok());
 
         let Some(zip64_locator) = zip64_locator else {
-            return EndOfCentralDirectory::create(eocd);
+            return EndOfCentralDirectory::create(EndOfCentralDirectoryRecord::from_parts(
+                location as u64,
+                &eocd,
+            ));
         };
 
         let zip64_eocd = &data[(zip64_locator.directory_offset as usize).min(data.len())..];
-        let zip64_record = Zip64EndOfCentralDirectoryRecord::parse(zip64_eocd)?;
+        let zip64_record = match parse_zip64_candidate(
+            zip64_eocd,
+            &eocd,
+            &zip64_locator,
+            location as u64 - Zip64EndOfCentralDirectoryLocatorRecord::SIZE as u64,
+        ) {
+            Some(record) => record,
+            None => {
+                return EndOfCentralDirectory::create(EndOfCentralDirectoryRecord::from_parts(
+                    location as u64,
+                    &eocd,
+                ));
+            }
+        };
 
         let zip64 =
             Zip64EndOfCentralDirectory::from_parts(zip64_locator.directory_offset, zip64_record);
+        let eocd = EndOfCentralDirectoryRecord::from_parts(location as u64, &eocd);
         EndOfCentralDirectory::create_zip64(eocd, zip64)
     }
 
@@ -283,7 +298,7 @@ pub(crate) struct EndOfCentralDirectoryRecord {
 
 impl EndOfCentralDirectoryRecord {
     #[inline]
-    pub fn from_parts(offset: u64, eocd: EndOfCentralDirectoryRecordFixed) -> Self {
+    pub fn from_parts(offset: u64, eocd: &EndOfCentralDirectoryRecordFixed) -> Self {
         Self {
             offset,
             central_dir_size: eocd.central_dir_size,
@@ -381,6 +396,38 @@ impl Zip64EndOfCentralDirectoryLocatorRecord {
 
         Ok(result)
     }
+}
+
+fn parse_zip64_candidate(
+    data: &[u8],
+    classic: &EndOfCentralDirectoryRecordFixed,
+    locator: &Zip64EndOfCentralDirectoryLocatorRecord,
+    locator_offset: u64,
+) -> Option<Zip64EndOfCentralDirectoryRecord> {
+    const ZIP64_SIZE_PREFIX: u64 = 12;
+    const ZIP64_MIN_SIZE: u64 = Zip64EndOfCentralDirectoryRecord::SIZE as u64 - ZIP64_SIZE_PREFIX;
+
+    let zip64 = Zip64EndOfCentralDirectoryRecord::parse(data).ok()?;
+
+    if zip64.size < ZIP64_MIN_SIZE {
+        return None;
+    }
+
+    let record_end = locator
+        .directory_offset
+        .checked_add(ZIP64_SIZE_PREFIX)?
+        .checked_add(zip64.size)?;
+
+    let consistent = record_end == locator_offset
+        && (classic.num_entries == u16::MAX || u64::from(classic.num_entries) == zip64.num_entries)
+        && (classic.total_entries == u16::MAX
+            || u64::from(classic.total_entries) == zip64.total_entries)
+        && (classic.central_dir_size == u32::MAX
+            || u64::from(classic.central_dir_size) == zip64.central_dir_size)
+        && (classic.central_dir_offset == u32::MAX
+            || u64::from(classic.central_dir_offset) == zip64.central_dir_offset);
+
+    consistent.then_some(zip64)
 }
 
 pub(crate) fn find_end_of_central_dir_signature(

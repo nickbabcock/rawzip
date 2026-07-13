@@ -222,17 +222,14 @@ impl ZipLocator {
             }
         }
 
-        let eocd = EndOfCentralDirectoryRecord::from_parts(eocd_offset, eocd);
-
         let eocd64l_size = Zip64EndOfCentralDirectoryLocatorRecord::SIZE;
 
-        // Always probe for a zip64 EOCD locator, which can be present
-        // even if a sentinel wasn't present.
+        // Always probe for a zip64 EOCD locator, which can be present without sentinels
         if (eocd64l_size as u64) > eocd_offset {
-            return match EndOfCentralDirectory::create(eocd) {
-                Ok(eocd) => Ok((reader.inner, eocd)),
-                Err(e) => Err((reader.inner, e)),
-            };
+            return finish_classic_eocd(
+                reader,
+                EndOfCentralDirectoryRecord::from_parts(eocd_offset, &eocd),
+            );
         }
 
         // Unhappy path: if we needed to issue any reads since the original
@@ -255,10 +252,10 @@ impl ZipLocator {
         let zip64_locator = match Zip64EndOfCentralDirectoryLocatorRecord::parse(zip64l_eocd) {
             Ok(locator) => locator,
             Err(_) => {
-                return match EndOfCentralDirectory::create(eocd) {
-                    Ok(eocd) => Ok((reader.inner, eocd)),
-                    Err(e) => Err((reader.inner, e)),
-                };
+                return finish_classic_eocd(
+                    reader,
+                    EndOfCentralDirectoryRecord::from_parts(eocd_offset, &eocd),
+                );
             }
         };
 
@@ -277,9 +274,16 @@ impl ZipLocator {
 
             match read {
                 Ok(read) => (0, read),
-                Err(e) => {
-                    return Err((reader.inner, Error::io(e)));
+                // If a false positive ZIP64 points outside the available data,
+                // treat it as a false-positive locator and use the classic
+                // EOCD. Propagate other I/O failures.
+                Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => {
+                    return finish_classic_eocd(
+                        reader,
+                        EndOfCentralDirectoryRecord::from_parts(eocd_offset, &eocd),
+                    );
                 }
+                Err(e) => return Err((reader.inner, Error::io(e))),
             }
         } else {
             (
@@ -289,19 +293,40 @@ impl ZipLocator {
         };
 
         let zip64_eocd = &buffer[eocd64_start..eocd64_end];
-        let zip64_record = match Zip64EndOfCentralDirectoryRecord::parse(zip64_eocd) {
-            Ok(record) => record,
-            Err(e) => return Err((reader.inner, e)),
+        let zip64_record = match super::parse_zip64_candidate(
+            zip64_eocd,
+            &eocd,
+            &zip64_locator,
+            eocd_offset - eocd64l_size as u64,
+        ) {
+            Some(record) => record,
+            None => {
+                return finish_classic_eocd(
+                    reader,
+                    EndOfCentralDirectoryRecord::from_parts(eocd_offset, &eocd),
+                );
+            }
         };
 
         // todo: zip64 extensible data sector
 
         let zip_eocd =
             Zip64EndOfCentralDirectory::from_parts(zip64_locator.directory_offset, zip64_record);
+        let eocd = EndOfCentralDirectoryRecord::from_parts(eocd_offset, &eocd);
         match EndOfCentralDirectory::create_zip64(eocd, zip_eocd) {
             Ok(eocd) => Ok((reader.inner, eocd)),
             Err(e) => Err((reader.inner, e)),
         }
+    }
+}
+
+fn finish_classic_eocd<R>(
+    reader: Marker<R>,
+    eocd: EndOfCentralDirectoryRecord,
+) -> Result<(R, EndOfCentralDirectory), (R, Error)> {
+    match EndOfCentralDirectory::create(eocd) {
+        Ok(eocd) => Ok((reader.inner, eocd)),
+        Err(e) => Err((reader.inner, e)),
     }
 }
 

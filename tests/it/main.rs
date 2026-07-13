@@ -1063,38 +1063,15 @@ fn test_should_not_overflow_on_offsets() {
         0, 80, 75, 5, 6, 0, 0, 0, 64, 255, 255, 0, 0, 8, 0, 53, 116, 10, 65, 126, 231, 0, 0, 0, 0,
         7, 0, 0, 0, 0, 144, 0, 0, 0, 0, 0, 0, 0, 255, 255, 255, 255, 255, 255, 255, 255, 0, 0,
     ];
-    let result = rawzip::ZipArchive::from_slice(&data).unwrap();
-    let entries = result.entries();
-    let mut has_error = false;
-
-    for entry in entries {
-        let Ok(entry) = entry else {
-            has_error = true;
-            break;
-        };
-        has_error |= result.get_entry(entry.wayfinder()).is_err();
-    }
-    assert!(has_error);
+    assert!(rawzip::ZipArchive::from_slice(&data).is_err());
 
     let mut buf = vec![0u8; rawzip::RECOMMENDED_BUFFER_SIZE];
     let locator = rawzip::ZipLocator::new();
-    let result = locator
-        .locate_in_reader(&data[..], &mut buf, data.len() as u64)
-        .unwrap();
-    let mut entries = result.entries(&mut buf);
-    let mut has_error = false;
-
-    loop {
-        let Ok(entry) = entries.next_entry() else {
-            has_error = true;
-            break;
-        };
-        let Some(entry) = entry else {
-            break;
-        };
-        has_error |= result.get_entry(entry.wayfinder()).is_err();
-    }
-    assert!(has_error);
+    assert!(
+        locator
+            .locate_in_reader(&data[..], &mut buf, data.len() as u64)
+            .is_err()
+    );
 }
 
 #[test]
