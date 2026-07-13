@@ -533,9 +533,19 @@ where
     /// buffer to parse entry headers.
     #[inline]
     pub fn next_entry(&mut self) -> Result<Option<ZipFileHeaderRecord<'_>>, Error> {
+        self.next_entry_impl()
+    }
+
+    // While inline always for the reader variant isn't as strong as the slice for the
+    // extraction benchmark, it is still yielded as 12% improvement when just iterating.
+    #[inline(always)]
+    fn next_entry_impl(&mut self) -> Result<Option<ZipFileHeaderRecord<'_>>, Error> {
         if self.pos + ZipFileHeaderFixed::SIZE > self.end {
             if self.offset >= self.central_dir_end_pos {
                 return if self.pos == self.end {
+                    Ok(None)
+                } else if self.buffer[self.pos..self.end].starts_with(&DIGITAL_SIGNATURE_BYTES) {
+                    self.pos = self.end;
                     Ok(None)
                 } else {
                     Err(Error::from(ErrorKind::Eof))
@@ -546,9 +556,10 @@ where
             self.buffer.copy_within(self.pos..self.end, 0);
             let max_read = ((self.central_dir_end_pos - self.offset) as usize)
                 .min(self.buffer.len() - remaining);
+            let min_read = ZipFileHeaderFixed::SIZE.min(remaining + max_read) - remaining;
             let read = self.archive.reader.read_at_least_at(
                 &mut self.buffer[remaining..][..max_read],
-                ZipFileHeaderFixed::SIZE,
+                min_read,
                 self.offset,
             )?;
             self.offset += read as u64;
@@ -558,7 +569,10 @@ where
 
         let central_directory_offset = self.offset - (self.end - self.pos) as u64;
         let data = &self.buffer[self.pos..self.end];
-        let file_header = ZipFileHeaderFixed::parse(data)?;
+        let file_header = match ZipFileHeaderFixed::parse(data) {
+            Ok(file_header) => file_header,
+            Err(err) => return self.next_entry_terminator(err),
+        };
         self.pos += ZipFileHeaderFixed::SIZE;
 
         let variable_length = file_header.variable_length();
@@ -607,6 +621,28 @@ where
         file_header.local_header_offset += self.base_offset;
         self.pos += variable_length;
         Ok(Some(file_header))
+    }
+
+    /// Handle a record that does not start with the central directory file
+    /// header signature.
+    ///
+    /// A digital signature record cleanly terminates iteration; anything else
+    /// is a genuine parse error.
+    #[cold]
+    #[inline(never)]
+    fn next_entry_terminator(
+        &mut self,
+        err: Error,
+    ) -> Result<Option<ZipFileHeaderRecord<'_>>, Error> {
+        let central_directory_offset = self.offset - (self.end - self.pos) as u64;
+        if self.central_dir_end_pos - central_directory_offset <= MAX_DIGITAL_SIGNATURE_SIZE as u64
+            && self.buffer[self.pos..self.end].starts_with(&DIGITAL_SIGNATURE_BYTES)
+        {
+            self.pos = self.end;
+            self.offset = self.central_dir_end_pos;
+            return Ok(None);
+        }
+        Err(err)
     }
 }
 

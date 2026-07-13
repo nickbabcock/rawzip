@@ -1,6 +1,65 @@
+use rawzip::path::EntryPath;
 use rawzip::{ZipArchive, ZipArchiveWriter};
 use rstest::rstest;
 use std::io::{Cursor, Write};
+
+/// Size of an end-of-central-directory record that carries no comment.
+const EOCD_SIZE: usize = 22;
+
+/// A digital signature record (`PK\x05\x05`) wrapping `payload`.
+fn digital_signature_record(payload: &[u8]) -> Vec<u8> {
+    let mut record = Vec::from(*b"PK\x05\x05");
+    record.extend_from_slice(&(payload.len() as u16).to_le_bytes());
+    record.extend_from_slice(payload);
+    record
+}
+
+/// Build a single-entry zip, splicing `trailer` between the central directory
+/// and the EOCD and growing the recorded central directory size to cover it.
+///
+/// The writer never emits a digital signature record itself, so we construct
+/// one here where every offset is known by construction rather than recovered
+/// by scanning the bytes.
+fn zip_with_cd_trailer<'a>(name: impl Into<EntryPath<'a>>, trailer: &[u8]) -> Vec<u8> {
+    let mut data = Vec::new();
+    {
+        let mut archive = ZipArchiveWriter::new(&mut data);
+        let (mut entry, config) = archive.new_file(name).start().unwrap();
+        let mut writer = config.wrap(&mut entry);
+        writer.write_all(b"contents").unwrap();
+        let (_, descriptor) = writer.finish().unwrap();
+        entry.finish(descriptor).unwrap();
+        archive.finish().unwrap();
+    }
+
+    let eocd = data.len() - EOCD_SIZE;
+    let cd_size = u32::from_le_bytes(data[eocd + 12..eocd + 16].try_into().unwrap());
+    data[eocd + 12..eocd + 16].copy_from_slice(&(cd_size + trailer.len() as u32).to_le_bytes());
+    data.splice(eocd..eocd, trailer.iter().copied());
+    data
+}
+
+/// Collect the entry file paths, asserting the slice and reader readers agree.
+fn entry_paths(data: &[u8]) -> Vec<Vec<u8>> {
+    let slice: Vec<Vec<u8>> = ZipArchive::from_slice(data)
+        .unwrap()
+        .entries()
+        .map(|entry| entry.unwrap().file_path().as_ref().to_vec())
+        .collect();
+
+    let mut buffer = vec![0; rawzip::RECOMMENDED_BUFFER_SIZE];
+    let archive = rawzip::ZipLocator::new()
+        .locate_in_reader(data, &mut buffer, data.len() as u64)
+        .unwrap();
+    let mut entries = archive.entries(&mut buffer);
+    let mut reader = Vec::new();
+    while let Some(entry) = entries.next_entry().unwrap() {
+        reader.push(entry.file_path().as_ref().to_vec());
+    }
+
+    assert_eq!(slice, reader, "slice and reader readers disagree");
+    slice
+}
 
 /// Helper function to find the start of ZIP data by finding the minimum local header offset
 fn find_zip_data_start_offset_slice<T: AsRef<[u8]>>(archive: &rawzip::ZipSliceArchive<T>) -> u64 {
@@ -166,4 +225,26 @@ fn test_zip_declared_prelude(#[case] entry_count: usize) {
     let zip_start_offset = find_zip_data_start_offset_slice(&archive);
     assert_eq!(zip_start_offset, 1000);
     assert_eq!(archive.entries().count(), entry_count);
+}
+
+#[test]
+fn central_directory_digital_signature() {
+    let data = zip_with_cd_trailer("README", &digital_signature_record(b"signed"));
+    assert_eq!(entry_paths(&data), [b"README".to_vec()]);
+}
+
+#[test]
+fn truncated_central_directory_digital_signature() {
+    // A degenerate record: only the 4-byte marker, with no size or payload.
+    let data = zip_with_cd_trailer("README", b"PK\x05\x05");
+    assert_eq!(entry_paths(&data), [b"README".to_vec()]);
+}
+
+#[test]
+fn digital_signature_marker_inside_record_data() {
+    // The marker appears both in a file name and inside the signature payload;
+    // neither should be mistaken for the terminator.
+    let name = EntryPath::verbatim(b"PK\x05\x05ME".as_slice());
+    let data = zip_with_cd_trailer(name, &digital_signature_record(b"PK\x05\x05"));
+    assert_eq!(entry_paths(&data), [b"PK\x05\x05ME".to_vec()]);
 }
