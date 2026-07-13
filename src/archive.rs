@@ -23,6 +23,9 @@ pub use reader::{ZipEntries, ZipEntry, ZipReader, ZipSliceVerifier, ZipVerifier}
 pub(crate) const END_OF_CENTRAL_DIR_SIGNATURE64: u32 = 0x06064b50;
 pub(crate) const END_OF_CENTRAL_DIR_LOCATOR_SIGNATURE: u32 = 0x07064b50;
 pub(crate) const CENTRAL_HEADER_SIGNATURE: u32 = 0x02014b50;
+pub(crate) const DIGITAL_SIGNATURE: u32 = 0x05054b50;
+pub(crate) const DIGITAL_SIGNATURE_BYTES: [u8; 4] = DIGITAL_SIGNATURE.to_le_bytes();
+const MAX_DIGITAL_SIGNATURE_SIZE: usize = 6 + u16::MAX as usize;
 
 /// The recommended buffer size to use when reading from a zip file.
 ///
@@ -364,11 +367,22 @@ impl<'data> ZipSliceEntries<'data> {
     /// Yield the next zip file entry in the central directory if there is any
     #[inline]
     pub fn next_entry(&mut self) -> Result<Option<ZipFileHeaderRecord<'data>>, Error> {
+        self.next_file_entry()
+    }
+
+    // Use inline always as this improved slice extraction of 100k entries by 14%.
+    // The reason why is that the return value is large and if the caller only wants
+    // the wayfinder then there is no need to materialize all the fields.
+    #[inline(always)]
+    fn next_file_entry(&mut self) -> Result<Option<ZipFileHeaderRecord<'data>>, Error> {
         if self.entry_data.is_empty() {
             return Ok(None);
         }
 
-        let file_header = ZipFileHeaderFixed::parse(self.entry_data)?;
+        let file_header = match ZipFileHeaderFixed::parse(self.entry_data) {
+            Ok(file_header) => file_header,
+            Err(err) => return self.next_entry_terminator(err),
+        };
         let Some((file_name, extra_field, file_comment, entry_data)) =
             file_header.parse_variable_length(&self.entry_data[ZipFileHeaderFixed::SIZE..])
         else {
@@ -386,6 +400,26 @@ impl<'data> ZipSliceEntries<'data> {
         self.current_offset += (self.entry_data.len() - entry_data.len()) as u64;
         self.entry_data = entry_data;
         Ok(Some(entry))
+    }
+
+    /// Handle a record that does not start with the central directory file
+    /// header signature.
+    ///
+    /// A digital signature record cleanly terminates iteration; anything else
+    /// is a genuine parse error.
+    #[cold]
+    #[inline(never)]
+    fn next_entry_terminator(
+        &mut self,
+        err: Error,
+    ) -> Result<Option<ZipFileHeaderRecord<'data>>, Error> {
+        if self.entry_data.len() <= MAX_DIGITAL_SIGNATURE_SIZE
+            && self.entry_data.starts_with(&DIGITAL_SIGNATURE_BYTES)
+        {
+            self.entry_data = &[];
+            return Ok(None);
+        }
+        Err(err)
     }
 }
 
