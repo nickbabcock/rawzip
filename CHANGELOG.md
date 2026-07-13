@@ -1,3 +1,12 @@
+## v0.5.1 - July 13th, 2026
+
+Additional zip file edge cases are now covered:
+
+- Detect Zip64 end of central directory records even when the classic record omits Zip64 sentinel values
+- Yield trailing nameless entries in the central directory reader
+- Presence of central directory digital signature record is a successful iteration termination
+- Align reader rejection of partial central directory entries with slice iteration
+
 ## v0.5.0 - July 11th, 2026
 
 > Oh boy, look how big the changelog is. Surely, this library has lost its way.
