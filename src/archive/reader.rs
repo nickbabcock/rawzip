@@ -124,6 +124,7 @@ impl<R> ZipArchive<R> {
             offset: self.eocd.directory_offset(),
             base_offset: self.eocd.base_offset(),
             central_dir_end_pos: self.eocd.head_eocd_offset(),
+            done: false,
         }
     }
 
@@ -521,6 +522,7 @@ pub struct ZipEntries<'archive, 'buf, R> {
     offset: u64,
     base_offset: u64,
     central_dir_end_pos: u64,
+    done: bool,
 }
 
 impl<R> ZipEntries<'_, '_, R>
@@ -531,6 +533,9 @@ where
     ///
     /// This method reads from the underlying archive reader into the provided
     /// buffer to parse entry headers.
+    ///
+    /// An error is terminal. After this method returns an error, all
+    /// subsequent calls return `Ok(None)`.
     #[inline]
     pub fn next_entry(&mut self) -> Result<Option<ZipFileHeaderRecord<'_>>, Error> {
         self.next_entry_impl()
@@ -540,6 +545,14 @@ where
     // extraction benchmark, it is still yielded as 12% improvement when just iterating.
     #[inline(always)]
     fn next_entry_impl(&mut self) -> Result<Option<ZipFileHeaderRecord<'_>>, Error> {
+        if self.done {
+            return Ok(None);
+        }
+
+        // Assume that iteration stops here. Only a successful parse clears the
+        // flag, so every error path (including `?`) ends iteration.
+        self.done = true;
+
         if self.pos + ZipFileHeaderFixed::SIZE > self.end {
             if self.offset >= self.central_dir_end_pos {
                 return if self.pos == self.end {
@@ -624,6 +637,7 @@ where
             .checked_add(self.base_offset)
             .ok_or(ErrorKind::Eof)?;
         self.pos += variable_length;
+        self.done = false;
         Ok(Some(file_header))
     }
 
