@@ -618,7 +618,11 @@ where
             file_comment,
             central_directory_offset,
         );
-        file_header.local_header_offset += self.base_offset;
+        // An offset past u64::MAX is past the end of all possible inputs.
+        file_header.local_header_offset = file_header
+            .local_header_offset
+            .checked_add(self.base_offset)
+            .ok_or(ErrorKind::Eof)?;
         self.pos += variable_length;
         Ok(Some(file_header))
     }

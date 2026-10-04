@@ -396,7 +396,11 @@ impl<'data> ZipSliceEntries<'data> {
             file_comment,
             self.current_offset,
         );
-        entry.local_header_offset += self.base_offset;
+        // An offset past u64::MAX is past the end of all possible inputs.
+        entry.local_header_offset = entry
+            .local_header_offset
+            .checked_add(self.base_offset)
+            .ok_or(ErrorKind::Eof)?;
         self.current_offset += (self.entry_data.len() - entry_data.len()) as u64;
         self.entry_data = entry_data;
         Ok(Some(entry))
