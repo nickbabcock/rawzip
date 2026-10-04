@@ -1,8 +1,8 @@
-## v0.5.2 - Unreleased
+## v0.5.2 - October 4th, 2026
 
 Fix central directory iteration that did not end after a parse error. The slice `Iterator` and the reader `next_entry` returned the same error forever, so callers that skip errors (for example, `filter_map(Result::ok)`) did not stop. An error now ends iteration, and `ZipSliceEntries` implements `FusedIterator`.
 
-Fix incorrect local header reads stemming from a `u64::MAX` overflow summing a Zip64 local offsets with prelude data present. An `Eof` is now returned.
+Fix incorrect local header reads stemming from a `u64::MAX` overflow summing a Zip64 local header offset with prelude data. Debug builds panicked and release builds wrapped silently. An `Eof` is now returned.
 
 Fix 32-bit targets (eg: wasm32) with zip data of 4 GiB or more. In a few instances, a `u64` was narrowed to a `usize` in arithmetic.
 
@@ -13,7 +13,7 @@ Fix 32-bit targets (eg: wasm32) with zip data of 4 GiB or more. In a few instanc
 
 64-bit targets are not affected.
 
-- Clamp timestamps outside the supported date range. When writing, dates after `2106-02-07 06:28:15 UTC` now use the maximum extended timestamp instead of wrapping to an earlier date. `UtcDateTime::from_unix` also clamps values outside years 1 through 65535. Reading standard ZIP timestamp fields is unchanged.
+Fix timestamps outside the supported date range. When writing, dates after `2106-02-07 06:28:15 UTC` now use the maximum extended timestamp instead of wrapping to an earlier date. `UtcDateTime::from_unix` also clamps values outside years 1 through 65535. Reading standard ZIP timestamp fields is unchanged.
 
 ## v0.5.1 - July 13th, 2026
 
