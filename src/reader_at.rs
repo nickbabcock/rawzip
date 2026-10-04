@@ -299,11 +299,9 @@ impl<T: ReaderAt + ?Sized> ReaderAt for Box<T> {
 ///
 /// // For example purposes, just slurp up all the prelude data
 /// let mut prelude_reader = RangeReader::new(archive.get_ref(), 0..zip_start_offset);
-/// prelude_reader.read_exact(&mut buffer[..zip_start_offset as usize])?;
-/// assert_eq!(
-///     &buffer[..zip_start_offset as usize],
-///     b"prefix that could be an executable jar file"
-/// );
+/// let mut prelude = Vec::new();
+/// prelude_reader.read_to_end(&mut prelude)?;
+/// assert_eq!(prelude, b"prefix that could be an executable jar file");
 /// # Ok::<(), Box<dyn std::error::Error>>(())
 /// ```
 #[derive(Debug, Clone)]

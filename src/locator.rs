@@ -60,7 +60,8 @@ impl ZipLocator {
     }
 
     fn locate_in_byte_slice(&self, data: &[u8]) -> Result<EndOfCentralDirectory, Error> {
-        let location = find_end_of_central_dir_signature(data, self.max_search_space as usize)
+        let max_search_space = self.max_search_space.min(data.len() as u64) as usize;
+        let location = find_end_of_central_dir_signature(data, max_search_space)
             .ok_or(ErrorKind::MissingEndOfCentralDirectory)?;
 
         let mut eocd = self
@@ -123,7 +124,7 @@ impl ZipLocator {
             ));
         };
 
-        let zip64_eocd = &data[(zip64_locator.directory_offset as usize).min(data.len())..];
+        let zip64_eocd = &data[zip64_locator.directory_offset.min(data.len() as u64) as usize..];
         let zip64_record = match parse_zip64_candidate(
             zip64_eocd,
             &eocd,
