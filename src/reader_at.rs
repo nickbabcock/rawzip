@@ -209,7 +209,9 @@ impl<T: ReaderAt + ?Sized> ReaderAt for &'_ mut T {
 impl ReaderAt for [u8] {
     #[inline]
     fn read_at(&self, buf: &mut [u8], offset: u64) -> std::io::Result<usize> {
-        let skip = self.len().min(offset as usize);
+        // Compare in u64 before narrowing: `offset as usize` would wrap an
+        // offset of 4 GiB or more on 32-bit targets.
+        let skip = offset.min(self.len() as u64) as usize;
         let data = &self[skip..];
         let len = data.len().min(buf.len());
         buf[..len].copy_from_slice(&data[..len]);
@@ -363,7 +365,9 @@ where
     R: ReaderAt,
 {
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
-        let read_size = buf.len().min(self.remaining() as usize);
+        // Compare in u64 before narrowing: `remaining() as usize` would
+        // truncate a range of 4 GiB or more on 32-bit targets.
+        let read_size = self.remaining().min(buf.len() as u64) as usize;
         let read = self.archive.read_at(&mut buf[..read_size], self.offset)?;
         self.offset += read as u64;
         Ok(read)
@@ -567,5 +571,48 @@ mod tests {
         let mut buf3 = [0u8; 10];
         let read3 = reader3.read(&mut buf3).unwrap();
         assert_eq!(read3, 0); // No data to read
+    }
+
+    /// A reader that reports zeros for every offset below `len`, without
+    /// backing memory — lets tests exercise ranges larger than the address space.
+    struct VirtualZeros {
+        len: u64,
+    }
+
+    impl ReaderAt for VirtualZeros {
+        fn read_at(&self, buf: &mut [u8], offset: u64) -> std::io::Result<usize> {
+            let n = self.len.saturating_sub(offset).min(buf.len() as u64) as usize;
+            buf[..n].fill(0);
+            Ok(n)
+        }
+    }
+
+    #[test]
+    fn test_range_reader_remaining_beyond_u32() {
+        // remaining = 4 GiB + 10: a `remaining() as usize` cap on 32-bit
+        // targets would see 10 and return a short read.
+        let len = (1u64 << 32) + 10;
+        let mut reader = RangeReader::new(VirtualZeros { len }, 0..len);
+        let mut buf = [0xffu8; 64];
+        assert_eq!(reader.read(&mut buf).unwrap(), 64);
+        assert_eq!(reader.remaining(), len - 64);
+    }
+
+    #[test]
+    fn test_range_reader_exactly_4gib_remaining() {
+        // remaining = exactly 4 GiB: a truncating cap on 32-bit targets
+        // computes 0 and reports a false EOF.
+        let len = 1u64 << 32;
+        let mut reader = RangeReader::new(VirtualZeros { len }, 0..len);
+        let mut buf = [0u8; 16];
+        assert_eq!(reader.read(&mut buf).unwrap(), 16);
+    }
+
+    #[test]
+    fn test_slice_read_at_offset_beyond_u32() {
+        // offset = 4 GiB + 1 is past the end of any slice; a wrapping
+        // `offset as usize` on 32-bit targets would read from offset 1.
+        let mut buf = [0u8; 5];
+        assert_eq!(TEST_DATA.read_at(&mut buf, (1u64 << 32) + 1).unwrap(), 0);
     }
 }
