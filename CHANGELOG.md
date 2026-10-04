@@ -1,5 +1,7 @@
 ## v0.5.2 - Unreleased
 
+Fix incorrect local header reads stemming from a `u64::MAX` overflow summing a Zip64 local offsets with prelude data present. An `Eof` is now returned.
+
 Fix 32-bit targets (eg: wasm32) with zip data of 4 GiB or more. In a few instances, a `u64` was narrowed to a `usize` in arithmetic.
 
 - Reading an entry with 4 GiB or more remaining returned short reads, or a false EOF at exactly 4 GiB (#198, thanks @MarSoft)
