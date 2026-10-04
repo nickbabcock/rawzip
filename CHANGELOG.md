@@ -1,5 +1,7 @@
 ## v0.5.2 - Unreleased
 
+Fix central directory iteration that did not end after a parse error. The slice `Iterator` and the reader `next_entry` returned the same error forever, so callers that skip errors (for example, `filter_map(Result::ok)`) did not stop. An error now ends iteration, and `ZipSliceEntries` implements `FusedIterator`.
+
 Fix incorrect local header reads stemming from a `u64::MAX` overflow summing a Zip64 local offsets with prelude data present. An `Eof` is now returned.
 
 Fix 32-bit targets (eg: wasm32) with zip data of 4 GiB or more. In a few instances, a `u64` was narrowed to a `usize` in arithmetic.

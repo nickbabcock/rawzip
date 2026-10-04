@@ -12,6 +12,7 @@ use std::path::Path;
 mod concurrent_tests;
 mod crc_tests;
 mod encryption_tests;
+mod entry_iteration_tests;
 mod entry_path_tests;
 mod extra_data_zip_tests;
 mod extra_fields_test;

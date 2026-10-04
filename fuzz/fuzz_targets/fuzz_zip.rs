@@ -81,6 +81,14 @@ fn fuzz_reader_zip_archive(data: &[u8], buf: &mut [u8]) -> Result<(), rawzip::Er
         }
     }
 
+    // Iteration that skips errors must end.
+    let mut entries = archive.entries(archive_buf);
+    let max_calls = max_entry_calls(data);
+    let calls = (0..=max_calls)
+        .take_while(|_| !matches!(entries.next_entry(), Ok(None)))
+        .count();
+    assert!(calls < max_calls, "reader entries did not end");
+
     Ok(())
 }
 
@@ -126,7 +134,18 @@ fn fuzz_slice_zip_archive(data: &[u8]) -> Result<(), rawzip::Error> {
         }
     }
 
+    // Iteration that skips errors must end.
+    let max_calls = max_entry_calls(data);
+    let calls = archive.entries().take(max_calls + 1).count();
+    assert!(calls < max_calls, "slice entries did not end");
+
     Ok(())
+}
+
+/// The maximum number of calls before central directory iteration ends. Each
+/// record is at least 46 bytes, and an error can add one more call.
+fn max_entry_calls(data: &[u8]) -> usize {
+    data.len() / 46 + 2
 }
 
 fn errors_eq(a: &Error, b: &ErrorKind) -> bool {

@@ -365,9 +365,16 @@ pub struct ZipSliceEntries<'data> {
 
 impl<'data> ZipSliceEntries<'data> {
     /// Yield the next zip file entry in the central directory if there is any
+    ///
+    /// An error is terminal. After this method returns an error, all
+    /// subsequent calls return `Ok(None)`.
     #[inline]
     pub fn next_entry(&mut self) -> Result<Option<ZipFileHeaderRecord<'data>>, Error> {
-        self.next_file_entry()
+        let result = self.next_file_entry();
+        if result.is_err() {
+            self.entry_data = &[];
+        }
+        result
     }
 
     // Use inline always as this improved slice extraction of 100k entries by 14%.
@@ -435,6 +442,8 @@ impl<'data> Iterator for ZipSliceEntries<'data> {
         self.next_entry().transpose()
     }
 }
+
+impl core::iter::FusedIterator for ZipSliceEntries<'_> {}
 
 /// The main entrypoint for reading a Zip archive.
 ///
