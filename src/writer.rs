@@ -629,7 +629,7 @@ where
             .unwrap_or_default();
 
         if let Some(datetime) = options.modification_time.as_ref() {
-            let unix_time = datetime.to_unix().max(0) as u32;
+            let unix_time = datetime.to_unix().clamp(0, u32::MAX.into()) as u32;
             let mut data = [0u8; 5];
             data[0] = 1; // Flags: modification time present
             data[1..].copy_from_slice(&unix_time.to_le_bytes());

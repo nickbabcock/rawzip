@@ -11,6 +11,8 @@ Fix 32-bit targets (eg: wasm32) with zip data of 4 GiB or more. In a few instanc
 
 64-bit targets are not affected.
 
+- Clamp timestamps outside the supported date range. When writing, dates after `2106-02-07 06:28:15 UTC` now use the maximum extended timestamp instead of wrapping to an earlier date. `UtcDateTime::from_unix` also clamps values outside years 1 through 65535. Reading standard ZIP timestamp fields is unchanged.
+
 ## v0.5.1 - July 13th, 2026
 
 Additional zip file edge cases are now covered:

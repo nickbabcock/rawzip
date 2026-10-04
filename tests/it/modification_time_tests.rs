@@ -200,6 +200,38 @@ fn test_timestamp_before_dos_range() {
     assert_eq!(actual_datetime, ZipDateTimeKind::Utc(datetime));
 }
 
+/// Test that a timestamp after the extended timestamp range (2106-02-07) does
+/// not wrap to an earlier date.
+#[test]
+fn test_timestamp_after_extended_timestamp_range() {
+    let datetime = UtcDateTime::from_components(2200, 1, 1, 0, 0, 0, 0).unwrap();
+    let mut output = Vec::new();
+
+    {
+        let mut archive = ZipArchiveWriter::new(&mut output);
+        let (mut entry, config) = archive
+            .new_file("test.txt")
+            .last_modified(datetime)
+            .start()
+            .unwrap();
+        let mut writer = config.wrap(&mut entry);
+        writer.write_all(b"Hello, world!").unwrap();
+        let (_, descriptor) = writer.finish().unwrap();
+        entry.finish(descriptor).unwrap();
+        archive.finish().unwrap();
+    }
+
+    let archive = ZipArchive::from_slice(&output).unwrap();
+    let mut entries = archive.entries();
+    let entry = entries.next_entry().unwrap().unwrap();
+
+    // The extended timestamp cannot hold the year 2200. The value must
+    // saturate to the end of the u32 range, and must not wrap to an earlier
+    // year.
+    let expected = UtcDateTime::from_components(2106, 2, 7, 6, 28, 15, 0).unwrap();
+    assert_eq!(entry.last_modified(), ZipDateTimeKind::Utc(expected));
+}
+
 /// Test multiple files with different modification times
 #[test]
 fn test_multiple_files_different_timestamps() {
