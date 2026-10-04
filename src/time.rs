@@ -299,7 +299,7 @@ impl<TZ: TimeZoneMarker> ZipDateTime<TZ> {
     /// // Invalid date returns None
     /// assert!(UtcDateTime::from_components(2023, 2, 30, 0, 0, 0, 0).is_none());
     /// ```
-    pub fn from_components(
+    pub const fn from_components(
         year: u16,
         month: u8,
         day: u8,
@@ -417,6 +417,9 @@ impl<TZ: TimeZoneMarker> ZipDateTime<TZ> {
 
 impl ZipDateTime<Utc> {
     /// Creates a ZipDateTime from a Unix timestamp (seconds since epoch)
+    ///
+    /// Timestamps outside the range 0001-01-01 00:00:00 to
+    /// 65535-12-31 23:59:59 saturate to the nearest limit.
     pub fn from_unix(seconds: i64) -> UtcDateTime {
         let (year, month, day, hour, minute, second) = unix_timestamp_to_components(seconds);
         ZipDateTime {
@@ -453,13 +456,13 @@ impl ZipDateTime<Utc> {
     /// Returns the number of seconds since the Unix epoch (1970-01-01 00:00:00 UTC).
     /// Negative values represent dates before 1970.
     #[must_use]
-    pub fn to_unix(&self) -> i64 {
+    pub const fn to_unix(&self) -> i64 {
         let days_since_epoch = self.days_from_civil();
 
-        (i64::from(days_since_epoch)) * 86400
-            + (i64::from(self.hour)) * 3600
-            + (i64::from(self.minute)) * 60
-            + (i64::from(self.second))
+        (days_since_epoch as i64) * 86400
+            + (self.hour as i64) * 3600
+            + (self.minute as i64) * 60
+            + (self.second as i64)
     }
 }
 
@@ -704,6 +707,9 @@ fn parse_unix_timestamp(data: &[u8]) -> Option<UtcDateTime> {
 fn unix_timestamp_to_components(timestamp: i64) -> (u16, u8, u8, u8, u8, u8) {
     const SECONDS_PER_DAY: i64 = 86400;
 
+    // Saturate the timestamp to the range that a `ZipDateTime` can hold.
+    let timestamp = timestamp.clamp(MIN_UNIX_TIMESTAMP, MAX_UNIX_TIMESTAMP);
+
     // Break timestamp into days and seconds within day.
     let total_days = timestamp.div_euclid(SECONDS_PER_DAY);
     let seconds_in_day = timestamp.rem_euclid(SECONDS_PER_DAY);
@@ -755,6 +761,16 @@ fn unix_timestamp_to_components(timestamp: i64) -> (u16, u8, u8, u8, u8, u8) {
         second,
     )
 }
+
+// Unix timestamp of 0001-01-01 00:00:00 UTC
+const MIN_UNIX_TIMESTAMP: i64 = UtcDateTime::from_components(1, 1, 1, 0, 0, 0, 0)
+    .unwrap()
+    .to_unix();
+
+// Unix timestamp of 65535-12-31 23:59:59 UTC
+const MAX_UNIX_TIMESTAMP: i64 = UtcDateTime::from_components(65535, 12, 31, 23, 59, 59, 0)
+    .unwrap()
+    .to_unix();
 
 // NTFS timestamp is 100-nanosecond intervals since 1601-01-01 00:00:00 UTC
 const NTFS_EPOCH_OFFSET: u64 = 11644473600; // Seconds between 1601-01-01 and 1970-01-01
@@ -1047,6 +1063,25 @@ mod tests {
             assert_eq!(datetime.minute(), minute);
             assert_eq!(datetime.second(), second);
             assert_eq!(datetime.to_unix(), negative_timestamp);
+        }
+    }
+
+    #[test]
+    fn test_unix_timestamps_outside_year_range() {
+        let min = utc_from_components(1, 1, 1, 0, 0, 0, 0);
+        let max = utc_from_components(65535, 12, 31, 23, 59, 59, 0);
+        assert_eq!(MIN_UNIX_TIMESTAMP, -62_135_596_800);
+        assert_eq!(MAX_UNIX_TIMESTAMP, 2_005_949_145_599);
+
+        // Timestamps before the year 1 saturate to 0001-01-01 00:00:00.
+        for timestamp in [MIN_UNIX_TIMESTAMP, MIN_UNIX_TIMESTAMP - 1, i64::MIN] {
+            assert_eq!(UtcDateTime::from_unix(timestamp), min, "{timestamp}");
+        }
+
+        // Timestamps after the year 65535 saturate to 65535-12-31 23:59:59,
+        // and do not wrap to an earlier year.
+        for timestamp in [MAX_UNIX_TIMESTAMP, MAX_UNIX_TIMESTAMP + 1, i64::MAX] {
+            assert_eq!(UtcDateTime::from_unix(timestamp), max, "{timestamp}");
         }
     }
 
