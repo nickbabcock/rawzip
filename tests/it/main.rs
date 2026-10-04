@@ -19,6 +19,7 @@ mod false_sentinel_tests;
 mod false_signature_tests;
 mod modification_time_tests;
 mod permission_tests;
+mod truncation_tests;
 mod utf8_tests;
 mod zip64_tests;
 

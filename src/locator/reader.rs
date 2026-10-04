@@ -400,7 +400,7 @@ where
     // have short comments if present).
     let mut window = INIT_SCAN_WINDOW.min(buffer.len());
     while chunk_end > max_back {
-        let read_size = window.min((chunk_end - max_back) as usize);
+        let read_size = (chunk_end - max_back).min(window as u64) as usize;
         let chunk_start = chunk_end - read_size as u64;
         let haystack = &mut buffer[..read_size];
 
@@ -604,5 +604,57 @@ mod tests {
             END_OF_CENTRAL_DIR_SIGNATURE_BYTES
         );
         assert!(buffer[MAX_SCAN_WINDOW..].iter().all(|byte| *byte == 0xa5));
+    }
+
+    /// A reader that returns zeros for every offset below `len`, except for
+    /// an end of central directory signature at `signature_at`. It returns
+    /// an error after 100 reads, thus a search that does not stop fails the
+    /// test.
+    struct VirtualSignature {
+        len: u64,
+        signature_at: u64,
+        reads: std::cell::Cell<u32>,
+    }
+
+    impl ReaderAt for VirtualSignature {
+        fn read_at(&self, buf: &mut [u8], offset: u64) -> std::io::Result<usize> {
+            self.reads.set(self.reads.get() + 1);
+            if self.reads.get() > 100 {
+                return Err(std::io::Error::other("too many reads"));
+            }
+
+            let n = self.len.saturating_sub(offset).min(buf.len() as u64) as usize;
+            let buf = &mut buf[..n];
+            buf.fill(0);
+            for (i, byte) in END_OF_CENTRAL_DIR_SIGNATURE_BYTES.iter().enumerate() {
+                let pos = self.signature_at + i as u64;
+                if let Some(b) = pos
+                    .checked_sub(offset)
+                    .and_then(|rel| buf.get_mut(rel as usize))
+                {
+                    *b = *byte;
+                }
+            }
+            Ok(n)
+        }
+    }
+
+    #[rstest]
+    #[case(1 << 32)]
+    #[case((1 << 32) + 10)]
+    fn test_find_end_of_central_dir_search_space_past_4gib(#[case] max_search_space: u64) {
+        // On a 32-bit target, a truncated distance to the search limit gives
+        // a read size of 0 or 10. The search then does not move back and does
+        // not stop.
+        let len = (1 << 32) + 1000;
+        let signature_at = len - 100;
+        let reader = VirtualSignature {
+            len,
+            signature_at,
+            reads: std::cell::Cell::new(0),
+        };
+        let mut buffer = vec![0u8; 1024];
+        let found = find_end_of_central_dir(&reader, &mut buffer, max_search_space, len).unwrap();
+        assert_eq!(found.map(|(offset, _, _)| offset), Some(signature_at));
     }
 }

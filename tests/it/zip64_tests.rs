@@ -3,7 +3,7 @@ use rawzip::{
     ZipLocator,
 };
 use rstest::rstest;
-use std::io::{Cursor, Write};
+use std::io::{Cursor, Read, Write};
 
 // ZIP64 signatures to check for
 const ZIP64_EOCD_SIGNATURE: u32 = 0x06064b50;
@@ -172,7 +172,7 @@ fn directory_entry_past_4gib_offset_round_trips() {
     let mut sink = SparseBuffer::default();
     let mut archive = ZipArchiveWriter::new(&mut sink);
 
-    // A >4 GiB stored entry so the following directory's local header offset
+    // A 4 GiB stored entry so the following directory's local header offset
     // trips the ZIP64 offset threshold. CRC is skipped so we don't hash 4 GiB.
     let (mut entry, config) = archive
         .new_file("filler.bin")
@@ -209,13 +209,25 @@ fn directory_entry_past_4gib_offset_round_trips() {
         .unwrap();
 
     let mut dir = None;
+    let mut filler = None;
     let mut entries = archive.entries(&mut buffer);
     while let Some(entry) = entries.next_entry().unwrap() {
-        if entry.file_path().as_ref() == b"past_4gib/" {
-            dir = Some(entry.wayfinder());
+        match entry.file_path().as_ref() {
+            b"past_4gib/" => dir = Some(entry.wayfinder()),
+            b"filler.bin" => filler = Some(entry.wayfinder()),
+            _ => {}
         }
     }
     let dir = dir.expect("past_4gib/ directory entry present in central directory");
+    let filler = filler.expect("filler.bin entry present in central directory");
+
+    // The filler data is exactly 4 GiB. On a 32-bit target, a truncated
+    // remaining length reads 0 bytes, which is a false EOF.
+    let filler = archive.get_entry(filler).unwrap();
+    let (start, end) = filler.compressed_data_range();
+    assert_eq!(end - start, 1 << 32);
+    let mut head = [0u8; 64];
+    filler.reader().read_exact(&mut head).unwrap();
 
     // Assert that we can seek and read the local header
     archive

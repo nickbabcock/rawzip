@@ -1,3 +1,14 @@
+## v0.5.2 - Unreleased
+
+Fix 32-bit targets (eg: wasm32) with zip data of 4 GiB or more. In a few instances, a `u64` was narrowed to a `usize` in arithmetic.
+
+- Reading an entry with 4 GiB or more remaining returned short reads, or a false EOF at exactly 4 GiB (#198, thanks @MarSoft)
+- A local header offset of 4 GiB or more read from the wrong position instead of returning an error
+- Central directory iteration with 4 GiB or more remaining returned a false `Eof`
+- A `max_search_space` of 4 GiB or more could miss the end of central directory record, or not stop the search
+
+64-bit targets are not affected.
+
 ## v0.5.1 - July 13th, 2026
 
 Additional zip file edge cases are now covered:

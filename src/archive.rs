@@ -179,7 +179,7 @@ impl<T: AsRef<[u8]>> ZipSliceArchive<T> {
     /// present before returning a [`ZipSliceEntry`].
     pub fn get_entry(&self, entry: ZipArchiveEntryWayfinder) -> Result<ZipSliceEntry<'_>, Error> {
         let data = self.data.as_ref();
-        let header = &data[(entry.local_header_offset as usize).min(data.len())..];
+        let header = &data[entry.local_header_offset.min(data.len() as u64) as usize..];
         let file_header = ZipLocalFileHeaderFixed::parse(header)?;
         let variable_length = file_header.variable_length();
 
