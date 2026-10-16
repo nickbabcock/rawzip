@@ -284,7 +284,7 @@ fn write_benchmarks(c: &mut Criterion) {
                 zip::write::FileOptions::default()
                     .compression_method(zip::CompressionMethod::Stored);
             options
-                .add_extra_data(ExtraFieldId::EXTENDED_TIMESTAMP.as_u16(), data, true)
+                .add_extra_field(ExtraFieldId::EXTENDED_TIMESTAMP.as_u16(), data, true)
                 .unwrap();
 
             for i in 0..WRITE_ENTRIES {

@@ -11,7 +11,7 @@ rc-zip = "5.4.1"
 rc-zip-sync = "4.4.2"
 tokio = { version = "1.52", features = ["rt", "rt-multi-thread"] }
 tokio-util = "0.7.18"
-zip = { version = "8.6" }
+zip = { version = "9.0" }
 
 [[bench]]
 name = "bench"
