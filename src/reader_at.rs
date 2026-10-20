@@ -206,12 +206,22 @@ impl<T: ReaderAt + ?Sized> ReaderAt for &'_ T {
     fn read_at(&self, buf: &mut [u8], offset: u64) -> std::io::Result<usize> {
         (*self).read_at(buf, offset)
     }
+
+    #[inline]
+    fn read_exact_at(&self, buf: &mut [u8], offset: u64) -> std::io::Result<()> {
+        (*self).read_exact_at(buf, offset)
+    }
 }
 
 impl<T: ReaderAt + ?Sized> ReaderAt for &'_ mut T {
     #[inline]
     fn read_at(&self, buf: &mut [u8], offset: u64) -> std::io::Result<usize> {
         (**self).read_at(buf, offset)
+    }
+
+    #[inline]
+    fn read_exact_at(&self, buf: &mut [u8], offset: u64) -> std::io::Result<()> {
+        (**self).read_exact_at(buf, offset)
     }
 }
 
@@ -258,6 +268,11 @@ impl<T: ReaderAt + ?Sized> ReaderAt for Arc<T> {
     fn read_at(&self, buf: &mut [u8], offset: u64) -> std::io::Result<usize> {
         (**self).read_at(buf, offset)
     }
+
+    #[inline]
+    fn read_exact_at(&self, buf: &mut [u8], offset: u64) -> std::io::Result<()> {
+        (**self).read_exact_at(buf, offset)
+    }
 }
 
 impl<T: ReaderAt + ?Sized> ReaderAt for Rc<T> {
@@ -265,12 +280,22 @@ impl<T: ReaderAt + ?Sized> ReaderAt for Rc<T> {
     fn read_at(&self, buf: &mut [u8], offset: u64) -> std::io::Result<usize> {
         (**self).read_at(buf, offset)
     }
+
+    #[inline]
+    fn read_exact_at(&self, buf: &mut [u8], offset: u64) -> std::io::Result<()> {
+        (**self).read_exact_at(buf, offset)
+    }
 }
 
 impl<T: ReaderAt + ?Sized> ReaderAt for Box<T> {
     #[inline]
     fn read_at(&self, buf: &mut [u8], offset: u64) -> std::io::Result<usize> {
         (**self).read_at(buf, offset)
+    }
+
+    #[inline]
+    fn read_exact_at(&self, buf: &mut [u8], offset: u64) -> std::io::Result<()> {
+        (**self).read_exact_at(buf, offset)
     }
 }
 
@@ -644,6 +669,22 @@ mod tests {
         }
     }
 
+    /// A reader whose `read_exact_at` override fills the buffer with a
+    /// marker byte, so a test can see if a wrapper called the override.
+    struct ExactOverride;
+
+    impl ReaderAt for ExactOverride {
+        fn read_at(&self, buf: &mut [u8], _offset: u64) -> std::io::Result<usize> {
+            buf.fill(0);
+            Ok(buf.len())
+        }
+
+        fn read_exact_at(&self, buf: &mut [u8], _offset: u64) -> std::io::Result<()> {
+            buf.fill(0xab);
+            Ok(())
+        }
+    }
+
     #[test]
     fn test_read_exact_at_retries_interrupted() {
         let reader = Interrupting::new(b"Hello");
@@ -658,6 +699,22 @@ mod tests {
         let mut buf = [0u8; 5];
         assert_eq!(reader.read_at_least_at(&mut buf, 5, 0).unwrap(), 5);
         assert_eq!(&buf, b"Hello");
+    }
+
+    #[test]
+    fn test_wrappers_forward_read_exact_at() {
+        fn check<R: ReaderAt>(reader: R) {
+            let mut buf = [0u8; 4];
+            reader.read_exact_at(&mut buf, 0).unwrap();
+            assert_eq!(buf, [0xab; 4]);
+        }
+
+        check(&ExactOverride);
+        check(&mut ExactOverride);
+        check(Arc::new(ExactOverride));
+        check(Rc::new(ExactOverride));
+        check(Box::new(ExactOverride));
+        check(Box::new(ExactOverride) as Box<dyn ReaderAt>);
     }
 
     #[test]

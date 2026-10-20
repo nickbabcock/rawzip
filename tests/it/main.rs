@@ -8,6 +8,8 @@ use std::cell::Cell;
 use std::fs::File;
 use std::io::{Cursor, Read, Seek, SeekFrom};
 use std::path::Path;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 mod concurrent_tests;
 mod crc_tests;
@@ -1236,6 +1238,65 @@ fn reader_local_header_returns_error_when_reread_diverges() {
         err.kind(),
         rawzip::ErrorKind::InvalidSignature { .. }
     ));
+}
+
+/// A reader that counts the calls to its `read_exact_at` override.
+struct ExactCountingReader {
+    data: Vec<u8>,
+    exact_reads: AtomicUsize,
+}
+
+impl rawzip::ReaderAt for ExactCountingReader {
+    fn read_at(&self, buf: &mut [u8], offset: u64) -> std::io::Result<usize> {
+        self.data.as_slice().read_at(buf, offset)
+    }
+
+    fn read_exact_at(&self, buf: &mut [u8], offset: u64) -> std::io::Result<()> {
+        self.exact_reads.fetch_add(1, Ordering::Relaxed);
+        self.data.as_slice().read_exact_at(buf, offset)
+    }
+}
+
+#[test]
+fn wrapped_reader_uses_inner_read_exact_at() {
+    fn check<R: rawzip::ReaderAt>(reader: R, end_offset: u64, exact_reads: impl Fn() -> usize) {
+        let mut buffer = vec![0u8; rawzip::RECOMMENDED_BUFFER_SIZE];
+        let archive = rawzip::ZipLocator::new()
+            .locate_in_reader(reader, &mut buffer, end_offset)
+            .map_err(|(_, e)| e)
+            .unwrap();
+        let located_reads = exact_reads();
+        assert!(located_reads > 0, "locator did not call the override");
+
+        let mut entries = archive.entries(&mut buffer);
+        let entry_header = entries.next_entry().unwrap().unwrap();
+        let entry = archive.get_entry(entry_header.wayfinder()).unwrap();
+        let mut local_buffer = vec![0u8; rawzip::RECOMMENDED_BUFFER_SIZE];
+        entry.local_header(&mut local_buffer).unwrap();
+        assert!(
+            exact_reads() > located_reads,
+            "entry read did not call the override"
+        );
+    }
+
+    let data = std::fs::read("assets/test.zip").unwrap();
+    let end_offset = data.len() as u64;
+
+    let reader = ExactCountingReader {
+        data: data.clone(),
+        exact_reads: AtomicUsize::new(0),
+    };
+    check(&reader, end_offset, || {
+        reader.exact_reads.load(Ordering::Relaxed)
+    });
+
+    let reader = Arc::new(ExactCountingReader {
+        data,
+        exact_reads: AtomicUsize::new(0),
+    });
+    check(reader.clone(), end_offset, || {
+        reader.exact_reads.load(Ordering::Relaxed)
+    });
 }
 
 #[test]
