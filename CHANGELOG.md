@@ -1,3 +1,7 @@
+## Unreleased
+
+Fix `ReaderAt` impls for `&T`, `&mut T`, `Arc<T>`, `Rc<T>`, and `Box<T>` that did not forward `read_exact_at`. A call through one of these wrappers ran the default loop and not the `read_exact_at` override of the inner reader. The archive locator had the same problem during and after the search for the end of the central directory.
+
 ## v0.5.2 - October 4th, 2026
 
 Fix central directory iteration that did not end after a parse error. The slice `Iterator` and the reader `next_entry` returned the same error forever, so callers that skip errors (for example, `filter_map(Result::ok)`) did not stop. An error now ends iteration, and `ZipSliceEntries` implements `FusedIterator`.
