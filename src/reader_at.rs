@@ -23,16 +23,24 @@ pub trait ReaderAt {
     fn read_at(&self, buf: &mut [u8], offset: u64) -> std::io::Result<usize>;
 
     /// Sibling to [`read_exact`](std::io::Read::read_exact), but at an offset
+    ///
+    /// The default implementation calls [`read_at`](ReaderAt::read_at) again
+    /// when it returns an [`Interrupted`](std::io::ErrorKind::Interrupted)
+    /// error, as `read_exact` does.
     fn read_exact_at(&self, buf: &mut [u8], offset: u64) -> std::io::Result<()> {
         let mut read = 0;
         while read < buf.len() {
-            let latest = self.read_at(&mut buf[read..], offset + (read as u64))?;
-            if latest == 0 {
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::UnexpectedEof,
-                    "failed to fill whole buffer",
-                ));
-            }
+            let latest = match self.read_at(&mut buf[read..], offset + (read as u64)) {
+                Ok(0) => {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::UnexpectedEof,
+                        "failed to fill whole buffer",
+                    ));
+                }
+                Ok(n) => n,
+                Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+                Err(e) => return Err(e),
+            };
             read += latest;
         }
         Ok(())
@@ -61,11 +69,12 @@ impl<T: ReaderAt> ReaderAtExt for T {
         size = size.min(buffer.len());
         let mut pos = 0;
         while pos < size {
-            let read = self.read_at(&mut buffer[pos..], offset + pos as u64)?;
-            if read == 0 {
-                return Ok(pos);
+            match self.read_at(&mut buffer[pos..], offset + pos as u64) {
+                Ok(0) => return Ok(pos),
+                Ok(read) => pos += read,
+                Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+                Err(e) => return Err(e),
             }
-            pos += read;
         }
         Ok(pos)
     }
@@ -604,6 +613,51 @@ mod tests {
         let mut reader = RangeReader::new(VirtualZeros { len }, 0..len);
         let mut buf = [0u8; 16];
         assert_eq!(reader.read(&mut buf).unwrap(), 16);
+    }
+
+    /// A reader that returns an `Interrupted` error on each other call.
+    struct Interrupting {
+        data: &'static [u8],
+        calls: std::cell::Cell<usize>,
+    }
+
+    impl Interrupting {
+        fn new(data: &'static [u8]) -> Self {
+            Self {
+                data,
+                calls: std::cell::Cell::new(0),
+            }
+        }
+    }
+
+    impl ReaderAt for Interrupting {
+        fn read_at(&self, buf: &mut [u8], offset: u64) -> std::io::Result<usize> {
+            let calls = self.calls.get();
+            self.calls.set(calls + 1);
+            if calls % 2 == 0 {
+                return Err(std::io::ErrorKind::Interrupted.into());
+            }
+
+            // Return one byte at most, to make the caller loop.
+            let len = buf.len().min(1);
+            self.data.read_at(&mut buf[..len], offset)
+        }
+    }
+
+    #[test]
+    fn test_read_exact_at_retries_interrupted() {
+        let reader = Interrupting::new(b"Hello");
+        let mut buf = [0u8; 5];
+        reader.read_exact_at(&mut buf, 0).unwrap();
+        assert_eq!(&buf, b"Hello");
+    }
+
+    #[test]
+    fn test_read_at_least_at_retries_interrupted() {
+        let reader = Interrupting::new(b"Hello");
+        let mut buf = [0u8; 5];
+        assert_eq!(reader.read_at_least_at(&mut buf, 5, 0).unwrap(), 5);
+        assert_eq!(&buf, b"Hello");
     }
 
     #[test]
