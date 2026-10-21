@@ -95,6 +95,11 @@ impl<T: ReaderAt> ReaderAtExt for T {
 pub struct FileReader(MutexReader<std::fs::File>);
 
 /// A file wrapper that implements [`ReaderAt`] across platforms.
+///
+/// [`FileReader`] does not give access to the file while it reads. If you
+/// must use the file at the same time (for example, its metadata or its file
+/// descriptor), keep the [`std::fs::File`] and implement [`ReaderAt`] on your
+/// own type.
 #[cfg(any(unix, windows))]
 #[derive(Debug)]
 pub struct FileReader(std::fs::File);
