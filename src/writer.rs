@@ -725,6 +725,7 @@ where
         let flags = if needs_utf8 { FLAG_UTF8_ENCODING } else { 0 };
 
         // Store the path bytes in the central buffer.
+        let name_start = self.file_names.len();
         let name_len = path_bytes.len() as u16;
         self.file_names.extend_from_slice(path_bytes);
 
@@ -732,10 +733,13 @@ where
 
         self.write_local_header(path_bytes, flags, CompressionMethod::STORE, &mut options)?;
 
+        let comment_start = self.file_comments.len();
         self.file_comments.extend_from_slice(&options.file_comment);
 
         let file_header = FileHeader {
+            name_start,
             name_len,
+            comment_start,
             file_comment_len,
             compression_method: CompressionMethod::STORE,
             local_header_offset,
@@ -837,6 +841,7 @@ where
         }
 
         // Store the path bytes in the central buffer.
+        let name_start = self.file_names.len();
         let name_len = path_bytes.len() as u16;
         self.file_names.extend_from_slice(path_bytes);
 
@@ -844,12 +849,15 @@ where
 
         self.write_local_header(path_bytes, flags, options.compression_method, &mut options)?;
 
+        let comment_start = self.file_comments.len();
         self.file_comments.extend_from_slice(&options.file_comment);
 
         Ok(ZipEntryWriter {
             inner: self,
             compressed_bytes: 0,
+            name_start,
             name_len,
+            comment_start,
             file_comment_len,
             local_header_offset,
             compression_method: options.compression_method,
@@ -877,13 +885,11 @@ where
             file.finalize_extra_fields()?;
         }
 
-        let mut name_offset = 0;
-        let mut comment_offset = 0;
-
         // Write central directory entries
         for file in &self.files {
-            let new_name_offset = name_offset + file.name_len as usize;
-            let file_name = &self.file_names[name_offset..new_name_offset];
+            // Entries that failed or were not finished leave their bytes in
+            // the buffers, so use the start positions of each entry.
+            let file_name = &self.file_names[file.name_start..][..file.name_len as usize];
 
             let is_dir = ZipFilePath::from_bytes(file_name).is_dir();
             let external_file_attrs = file.unix_permissions.map(|x| x << 16).unwrap_or(0)
@@ -933,17 +939,15 @@ where
 
             // File name
             self.writer.write_all(file_name)?;
-            name_offset = new_name_offset;
 
             // Extra fields
             file.extra_fields
                 .write_extra_fields(&mut self.writer, Header::CENTRAL)?;
 
             if file.file_comment_len > 0 {
-                let new_comment_offset = comment_offset + file.file_comment_len as usize;
+                let comment = &self.file_comments[file.comment_start..];
                 self.writer
-                    .write_all(&self.file_comments[comment_offset..new_comment_offset])?;
-                comment_offset = new_comment_offset;
+                    .write_all(&comment[..file.file_comment_len as usize])?;
             }
         }
 
@@ -1010,7 +1014,9 @@ where
 pub struct ZipEntryWriter<'a, W> {
     inner: &'a mut ZipArchiveWriter<W>,
     compressed_bytes: u64,
+    name_start: usize,
     name_len: u16,
+    comment_start: usize,
     file_comment_len: u16,
     local_header_offset: u64,
     compression_method: CompressionMethod,
@@ -1094,7 +1100,9 @@ impl<'a, W> ZipEntryWriter<'a, W> {
         self.inner.writer.write_all(out_data)?;
 
         let file_header = FileHeader {
+            name_start: self.name_start,
             name_len: self.name_len,
+            comment_start: self.comment_start,
             file_comment_len: self.file_comment_len,
             compression_method: self.compression_method,
             local_header_offset: self.local_header_offset,
@@ -1376,7 +1384,9 @@ impl DataDescriptorOutput {
 
 #[derive(Debug)]
 struct FileHeader {
+    name_start: usize,
     name_len: u16,
+    comment_start: usize,
     file_comment_len: u16,
     compression_method: CompressionMethod,
     local_header_offset: u64,
@@ -1978,6 +1988,61 @@ mod tests {
 
         let result = archive.new_dir("dir/").comment(too_long).create();
         assert!(result.is_err());
+    }
+
+    /// Writes `good.txt` with a comment, then makes sure that the central
+    /// directory has only that entry, with the correct name and comment.
+    fn finish_with_good_entry(mut archive: ZipArchiveWriter<&mut Vec<u8>>) {
+        let (mut entry, config) = archive
+            .new_file("good.txt")
+            .comment("good comment")
+            .start()
+            .unwrap();
+        let (_, descriptor) = config.wrap(&mut entry).finish().unwrap();
+        entry.finish(descriptor).unwrap();
+        let output = archive.finish().unwrap();
+
+        let archive = ZipArchive::from_slice(output.as_slice()).unwrap();
+        let mut entries = archive.entries();
+        let entry = entries.next_entry().unwrap().unwrap();
+        assert_eq!(entry.file_path().as_ref(), b"good.txt");
+        assert_eq!(entry.comment().as_bytes(), b"good comment");
+        let local = archive.get_entry(entry.wayfinder()).unwrap();
+        assert_eq!(local.local_header().file_path().as_ref(), b"good.txt");
+        assert!(entries.next_entry().unwrap().is_none());
+    }
+
+    #[test]
+    fn test_failed_file_start_does_not_corrupt_next_entry() {
+        let too_long = vec![b'a'; u16::MAX as usize + 1];
+        let mut output = Vec::new();
+        let mut archive = ZipArchiveWriter::new(&mut output);
+        let result = archive.new_file("bad.txt").comment(too_long).start();
+        assert!(result.is_err());
+        finish_with_good_entry(archive);
+    }
+
+    #[test]
+    fn test_failed_dir_create_does_not_corrupt_next_entry() {
+        let too_long = vec![b'a'; u16::MAX as usize + 1];
+        let mut output = Vec::new();
+        let mut archive = ZipArchiveWriter::new(&mut output);
+        let result = archive.new_dir("bad/").comment(too_long).create();
+        assert!(result.is_err());
+        finish_with_good_entry(archive);
+    }
+
+    #[test]
+    fn test_unfinished_entry_does_not_corrupt_next_entry() {
+        let mut output = Vec::new();
+        let mut archive = ZipArchiveWriter::new(&mut output);
+        let (entry, _config) = archive
+            .new_file("abandoned.txt")
+            .comment("abandoned comment")
+            .start()
+            .unwrap();
+        drop(entry);
+        finish_with_good_entry(archive);
     }
 
     #[test]
