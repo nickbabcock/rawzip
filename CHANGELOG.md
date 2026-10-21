@@ -1,5 +1,7 @@
 ## Unreleased
 
+Fix a corrupt central directory after a writer entry failed or was not finished. When `ZipFileBuilder::start` or `ZipDirBuilder::create` returned an error (for example, a comment longer than 65,535 bytes), or when a `ZipEntryWriter` was dropped without `finish`, the names and comments of all subsequent entries were written at the wrong positions. The central directory then disagreed with the local headers, and no error was returned. Each entry now records the position of its name and comment.
+
 Fix `ExtraFieldId::WINDOWS_NT_SECURITY_DESCRIPTOR`, which was `0x4653` instead of the `0x4453` ("SD") given in APPNOTE 4.6.1. Lookups and matches against the constant did not find the field.
 
 Improve slice extraction throughput by 11–33%. `ZipSliceArchive::get_entry` now splits the local header and compressed data into separate slices, so `ZipSliceEntry::data` returns the stored slice without a bounds check.
