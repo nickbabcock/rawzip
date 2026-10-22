@@ -172,6 +172,17 @@ where
         lock.seek(std::io::SeekFrom::Start(original_position))?;
         result
     }
+
+    /// Lock the mutex one time for the full read. The default loop locks and
+    /// seeks again for each short read.
+    fn read_exact_at(&self, buf: &mut [u8], offset: u64) -> std::io::Result<()> {
+        let mut lock = self.0.lock().unwrap();
+        let original_position = lock.stream_position()?;
+        lock.seek(std::io::SeekFrom::Start(offset))?;
+        let result = lock.read_exact(buf);
+        lock.seek(std::io::SeekFrom::Start(original_position))?;
+        result
+    }
 }
 
 impl<R> std::io::Read for MutexReader<R>
@@ -612,5 +623,48 @@ mod tests {
         // `offset as usize` on 32-bit targets would read from offset 1.
         let mut buf = [0u8; 5];
         assert_eq!(TEST_DATA.read_at(&mut buf, (1u64 << 32) + 1).unwrap(), 0);
+    }
+
+    /// A stream that returns one byte for each read and counts the seeks.
+    struct ShortReads {
+        inner: Cursor<&'static [u8]>,
+        seeks: usize,
+    }
+
+    impl std::io::Read for ShortReads {
+        fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+            let len = buf.len().min(1);
+            self.inner.read(&mut buf[..len])
+        }
+    }
+
+    impl std::io::Seek for ShortReads {
+        fn seek(&mut self, pos: std::io::SeekFrom) -> std::io::Result<u64> {
+            self.seeks += 1;
+            self.inner.seek(pos)
+        }
+    }
+
+    #[test]
+    fn test_mutex_reader_read_exact_at_seeks_once() {
+        let mut inner = Cursor::new(TEST_DATA);
+        inner.set_position(3);
+        let reader = MutexReader::new(ShortReads { inner, seeks: 0 });
+
+        let mut buf = [0u8; 5];
+        reader.read_exact_at(&mut buf, 7).unwrap();
+        assert_eq!(&buf, b"World");
+
+        let mut buf = [0u8; 5];
+        let err = reader
+            .read_exact_at(&mut buf, TEST_DATA.len() as u64 - 2)
+            .unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::UnexpectedEof);
+
+        // Each call does stream_position, a seek to the offset, and a seek
+        // back to the original position.
+        let inner = reader.into_inner();
+        assert_eq!(inner.seeks, 6);
+        assert_eq!(inner.inner.position(), 3);
     }
 }
