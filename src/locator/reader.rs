@@ -214,10 +214,15 @@ impl ZipLocator {
                 eocd_offset + EndOfCentralDirectoryRecordFixed::SIZE as u64 + pos as u64;
             let remaining_comment_len = comment_len - pos;
 
-            // Try to read a single byte to validate the rest of the comment is accessible
+            // Try to read a single byte to validate the rest of the comment is accessible.
+            // Read from the inner reader, because this read does not change the
+            // buffer and must not set the mark.
             let mut temp_buf = [0u8; 1];
             let end_comment_offset = comment_offset + remaining_comment_len as u64 - 1;
-            if let Err(e) = reader.read_exact_at(&mut temp_buf, end_comment_offset) {
+            if let Err(e) = reader
+                .inner
+                .read_exact_at(&mut temp_buf, end_comment_offset)
+            {
                 return Err((reader.inner, Error::io(e)));
             }
         }
