@@ -1514,3 +1514,52 @@ fn iterates_past_undercounted_eocd() {
     }
     assert_eq!(actual, 3);
 }
+
+/// A reader that records the offset of each read.
+struct OffsetRecordingReader {
+    data: Vec<u8>,
+    offsets: std::sync::Mutex<Vec<u64>>,
+}
+
+impl rawzip::ReaderAt for OffsetRecordingReader {
+    fn read_at(&self, buf: &mut [u8], offset: u64) -> std::io::Result<usize> {
+        self.offsets.lock().unwrap().push(offset);
+        self.data.as_slice().read_at(buf, offset)
+    }
+}
+
+/// The comment probe does not overwrite the scan buffer, so the zip64 locator
+/// check must use the data that is still in the buffer.
+#[test]
+fn comment_probe_does_not_cause_reread_of_zip64_locator() {
+    let comment = vec![0u8; 2000];
+    let mut output = Vec::new();
+    let mut writer = ZipArchiveWriter::new(&mut output);
+    let (entry, config) = writer
+        .new_file("a.txt")
+        .compression_method(rawzip::CompressionMethod::STORE)
+        .start()
+        .unwrap();
+    let (entry, descriptor) = config.wrap(entry).finish().unwrap();
+    entry.finish(descriptor).unwrap();
+    writer.set_comment(comment.clone());
+    writer.finish().unwrap();
+
+    let eocd_offset = (output.len() - 22 - comment.len()) as u64;
+    let end_offset = output.len() as u64;
+    let reader = OffsetRecordingReader {
+        data: output,
+        offsets: std::sync::Mutex::new(Vec::new()),
+    };
+    let mut buffer = vec![0u8; rawzip::RECOMMENDED_BUFFER_SIZE];
+    rawzip::ZipLocator::new()
+        .locate_in_reader(&reader, &mut buffer, end_offset)
+        .map_err(|(_, e)| e)
+        .unwrap();
+
+    let offsets = reader.offsets.lock().unwrap();
+    assert!(
+        !offsets.contains(&(eocd_offset - 20)),
+        "zip64 locator was read again: {offsets:?}"
+    );
+}
