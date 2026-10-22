@@ -8,6 +8,8 @@ Fix reads that failed on an `Interrupted` error (for example, `EINTR` from a sig
 
 Fix `ReaderAt` impls for `&T`, `&mut T`, `Arc<T>`, `Rc<T>`, and `Box<T>` that did not forward `read_exact_at`. A call through one of these wrappers ran the default loop and not the `read_exact_at` override of the inner reader. The archive locator had the same problem during and after the search for the end of the central directory.
 
+`MutexReader` (used by `ZipArchive::from_seekable`) now implements `read_exact_at` with one lock and one pair of seeks for the full read. Before, each short read from the inner stream locked the mutex and seeked again.
+
 Improve slice extraction throughput by 11–33%. `ZipSliceArchive::get_entry` now splits the local header and compressed data into separate slices, so `ZipSliceEntry::data` returns the stored slice without a bounds check.
 
 Remove extra reads from the archive locator when the archive comment does not fit in the scan buffer. The locator read the zip64 end of central directory locator and record again, although the data was still in the buffer. A reader with a high cost per read (for example, an HTTP range reader) saw this as extra requests.
