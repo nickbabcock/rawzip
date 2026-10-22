@@ -1,3 +1,7 @@
+## Unreleased
+
+Remove extra reads from the archive locator when the archive comment does not fit in the scan buffer. The locator read the zip64 end of central directory locator and record again, although the data was still in the buffer. A reader with a high cost per read (for example, an HTTP range reader) saw this as extra requests.
+
 ## v0.5.2 - October 4th, 2026
 
 Fix central directory iteration that did not end after a parse error. The slice `Iterator` and the reader `next_entry` returned the same error forever, so callers that skip errors (for example, `filter_map(Result::ok)`) did not stop. An error now ends iteration, and `ZipSliceEntries` implements `FusedIterator`.
