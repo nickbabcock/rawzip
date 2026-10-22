@@ -227,16 +227,23 @@ fn empty_classic_eocd(prefix: Vec<u8>) -> Vec<u8> {
 
 #[test]
 fn reader_error_while_probing_zip64_locator_is_propagated() {
-    let data = empty_classic_eocd(vec![0; 20]);
+    // The comment keeps the locator outside of the scan buffer, so the locator
+    // probe must read it separately.
+    let comment = [b'c'; 20];
+    let mut data = empty_classic_eocd(vec![0; 20]);
+    let comment_len = data.len() - 2;
+    data[comment_len..].copy_from_slice(&(comment.len() as u16).to_le_bytes());
+    data.extend_from_slice(&comment);
+    let end_offset = data.len() as u64;
     let reader = FailingReader {
         data,
         fail_offset: 0,
         error_kind: std::io::ErrorKind::Other,
     };
-    let mut buffer = [0; 22];
+    let mut buffer = [0; 56];
 
     let (_, err) = ZipLocator::new()
-        .locate_in_reader(reader, &mut buffer, 42)
+        .locate_in_reader(reader, &mut buffer, end_offset)
         .unwrap_err();
     assert!(matches!(err.kind(), ErrorKind::IO(e) if e.kind() == std::io::ErrorKind::Other));
 }
@@ -259,7 +266,7 @@ fn reader_error_while_fetching_zip64_candidate_is_propagated() {
         fail_offset: 0,
         error_kind: std::io::ErrorKind::Other,
     };
-    let mut buffer = [0; 46];
+    let mut buffer = [0; 56];
 
     let (_, err) = ZipLocator::new()
         .locate_in_reader(reader, &mut buffer, end_offset)
@@ -276,7 +283,7 @@ fn unexpected_eof_while_fetching_zip64_candidate_falls_back_to_classic() {
         fail_offset: 0,
         error_kind: std::io::ErrorKind::UnexpectedEof,
     };
-    let mut buffer = [0; 46];
+    let mut buffer = [0; 56];
 
     let archive = ZipLocator::new()
         .locate_in_reader(reader, &mut buffer, end_offset)

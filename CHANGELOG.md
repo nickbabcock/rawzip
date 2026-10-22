@@ -1,3 +1,7 @@
+## Unreleased
+
+Fix panics and wrong results with small read buffers. `ZipLocator::locate_in_reader`, `ZipLocator::locate_in_file`, `ZipArchive::from_file`, and `ZipArchive::from_seekable` panicked with a buffer of 22 to 45 bytes, and debug builds panicked with a buffer of less than 4 bytes. A buffer of 46 to 55 bytes could not hold the Zip64 end of central directory record, so a Zip64 archive was read from its classic record. These functions now return `ErrorKind::BufferTooSmall` for a buffer of less than 56 bytes. `ZipEntries::next_entry` returned a false `Eof` with a buffer of less than 46 bytes. It now returns `ErrorKind::BufferTooSmall`.
+
 ## v0.5.2 - October 4th, 2026
 
 Fix central directory iteration that did not end after a parse error. The slice `Iterator` and the reader `next_entry` returned the same error forever, so callers that skip errors (for example, `filter_map(Result::ok)`) did not stop. An error now ends iteration, and `ZipSliceEntries` implements `FusedIterator`.

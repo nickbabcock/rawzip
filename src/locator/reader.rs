@@ -5,6 +5,12 @@ use core::cell::RefCell;
 use std::fs::File;
 use std::io::Seek;
 
+/// The smallest buffer that holds each fixed-size record that the locator
+/// reads: the Zip64 end of central directory record and the first central
+/// directory header.
+const MIN_BUFFER_SIZE: usize = Zip64EndOfCentralDirectoryRecord::SIZE;
+const _: () = assert!(MIN_BUFFER_SIZE >= ZipFileHeaderFixed::SIZE);
+
 impl ZipLocator {
     /// Locates the EOCD record within a file.
     ///
@@ -13,7 +19,8 @@ impl ZipLocator {
     /// the ZIP64 EOCD locator if present. A common size might be a few
     /// kilobytes.
     ///
-    /// On failure, returns the original file and an `Error`.
+    /// On failure, returns the original file and an `Error`. A buffer smaller
+    /// than 56 bytes returns [`ErrorKind::BufferTooSmall`].
     ///
     /// # Examples
     ///
@@ -65,6 +72,8 @@ impl ZipLocator {
     /// Note that the zip locator may request data passed the end offset in
     /// order to read the entire end of the central directory record + comment.
     ///
+    /// A buffer smaller than 56 bytes returns [`ErrorKind::BufferTooSmall`].
+    ///
     /// # Examples
     ///
     /// ```rust
@@ -115,6 +124,13 @@ impl ZipLocator {
     where
         R: ReaderAt,
     {
+        if buffer.len() < MIN_BUFFER_SIZE {
+            let error = Error::from(ErrorKind::BufferTooSmall {
+                required: MIN_BUFFER_SIZE,
+            });
+            return Err((reader, error));
+        }
+
         let location_result =
             find_end_of_central_dir(&mut reader, buffer, self.max_search_space, end_offset);
 

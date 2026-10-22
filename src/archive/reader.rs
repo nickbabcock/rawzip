@@ -27,7 +27,8 @@ impl ZipArchive<()> {
     /// Parses an archive from a file by reading the End of Central Directory.
     ///
     /// A buffer is required to read parts of the file.
-    /// [`RECOMMENDED_BUFFER_SIZE`] can be used to construct this buffer.
+    /// [`RECOMMENDED_BUFFER_SIZE`] can be used to construct this buffer. A
+    /// buffer smaller than 56 bytes returns [`ErrorKind::BufferTooSmall`].
     pub fn from_file(
         file: std::fs::File,
         buffer: &mut [u8],
@@ -563,6 +564,13 @@ where
                 } else {
                     Err(Error::from(ErrorKind::Eof))
                 };
+            }
+
+            // The buffer can never hold the fixed part of a header.
+            if self.buffer.len() < ZipFileHeaderFixed::SIZE {
+                return Err(Error::from(ErrorKind::BufferTooSmall {
+                    required: ZipFileHeaderFixed::SIZE,
+                }));
             }
 
             let remaining = self.end - self.pos;
