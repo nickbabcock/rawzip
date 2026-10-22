@@ -361,6 +361,15 @@ where
             x => x,
         }
     }
+
+    fn read_exact_at(&self, buf: &mut [u8], offset: u64) -> std::io::Result<()> {
+        // Set the mark before the read, because a read that fails can
+        // overwrite part of the buffer.
+        if !buf.is_empty() {
+            *self.marked.borrow_mut() = true;
+        }
+        self.inner.read_exact_at(buf, offset)
+    }
 }
 
 impl<T> std::io::Seek for Marker<T>
@@ -656,5 +665,33 @@ mod tests {
         let mut buffer = vec![0u8; 1024];
         let found = find_end_of_central_dir(&reader, &mut buffer, max_search_space, len).unwrap();
         assert_eq!(found.map(|(offset, _, _)| offset), Some(signature_at));
+    }
+
+    /// A reader whose `read_exact_at` override fills the buffer with a
+    /// marker byte, so a test can see if `Marker` called the override.
+    struct ExactOverride;
+
+    impl ReaderAt for ExactOverride {
+        fn read_at(&self, buf: &mut [u8], _offset: u64) -> std::io::Result<usize> {
+            buf.fill(0);
+            Ok(buf.len())
+        }
+
+        fn read_exact_at(&self, buf: &mut [u8], _offset: u64) -> std::io::Result<()> {
+            buf.fill(0xab);
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn test_marker_forwards_read_exact_at() {
+        let reader = Marker::new(ExactOverride);
+        reader.read_exact_at(&mut [], 0).unwrap();
+        assert!(!reader.is_marked());
+
+        let mut buf = [0u8; 4];
+        reader.read_exact_at(&mut buf, 0).unwrap();
+        assert_eq!(buf, [0xab; 4]);
+        assert!(reader.is_marked());
     }
 }
