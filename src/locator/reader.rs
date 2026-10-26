@@ -469,7 +469,8 @@ mod tests {
         #[case] max_search_space: u64,
         #[case] expected: Option<u64>,
     ) {
-        let result = find_end_of_central_dir_signature(input, max_search_space as usize);
+        let result = split_at_end_of_central_dir_signature(input, max_search_space as usize)
+            .map(|(before, _)| before.len());
         assert_eq!(result.map(|x| x as u64), expected);
 
         let cursor = Cursor::new(input);
@@ -512,7 +513,9 @@ mod tests {
         let pos = (offset % data.len()).saturating_sub(END_OF_CENTRAL_DIR_SIGNATURE_BYTES.len());
         data[pos..pos + 4].copy_from_slice(&END_OF_CENTRAL_DIR_SIGNATURE_BYTES);
 
-        let result = find_end_of_central_dir_signature(&data, max_search_space as usize).unwrap();
+        let result = split_at_end_of_central_dir_signature(&data, max_search_space as usize)
+            .map(|(before, _)| before.len())
+            .unwrap();
 
         let mut buffer = vec![0u8; chunk_size.max(4) as usize];
         let reader = std::io::Cursor::new(&data);
@@ -547,7 +550,8 @@ mod tests {
         chunk_size: u16,
         max_search_space: u64,
     ) {
-        let mem = find_end_of_central_dir_signature(&data, max_search_space as usize);
+        let mem = split_at_end_of_central_dir_signature(&data, max_search_space as usize)
+            .map(|(before, _)| before.len());
 
         let mut buffer = vec![0u8; chunk_size.max(4) as usize];
         let reader = std::io::Cursor::new(&data);
