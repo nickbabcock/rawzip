@@ -491,34 +491,143 @@ fn rfind<const NEEDLE: u32>(haystack: &[u8]) -> Option<usize> {
         (matches != 0).then(|| matches.ilog2() as usize / 8)
     };
 
-    // The fast path scans backwards for the needle's last byte as a candidate
+    #[inline(always)]
+    fn load(chunk: &[u8], at: usize) -> u64 {
+        u64::from_le_bytes([
+            chunk[at],
+            chunk[at + 1],
+            chunk[at + 2],
+            chunk[at + 3],
+            chunk[at + 4],
+            chunk[at + 5],
+            chunk[at + 6],
+            chunk[at + 7],
+        ])
+    }
+
+    // The bytes before the first word of a haystack are `front`, which may be
+    // too short for a needle to end in the word's leading lanes. Returns the
+    // word they end and the mask of lanes a needle can end in.
+    let before = |front: &[u8]| {
+        let valid = !0u64 << (8 * (N - 1).saturating_sub(front.len()));
+        let prev = front.iter().fold(0, |acc, &b| {
+            (acc >> 8) | (u64::from(b) << (8 * (LANES - 1)))
+        });
+        (prev, valid)
+    };
+
+    // Candidates for the needle's last two bytes, which are rarer together
+    let pair =
+        |prev: u64, cur: u64| haszero(cur ^ bc[N - 1]) & haszero(shifted(prev, cur, 1) ^ bc[N - 2]);
+
+    // The fast path scans backwards for the needle's last byte as a candidate,
+    // a block of words per branch
+    const BLOCK: usize = 8 * LANES;
+    let mut blocks = haystack.rchunks_exact(BLOCK);
+    let blocks_front = blocks.remainder();
+
+    // A match is most often in the last block, as an end of central directory
+    // record with no or a short comment, so it is checked a word at a time
+    // from its end before whole blocks are filtered
+    if let Some(block) = blocks.next() {
+        let mut words = block.rchunks_exact(LANES);
+        while let Some(cur) = words.next() {
+            let cur = load(cur, 0);
+            let mut cand = haszero(cur ^ bc[N - 1]);
+            if cand == 0 {
+                continue;
+            }
+
+            let prev = match words.clone().next() {
+                Some(p) => load(p, 0),
+                None => match blocks.clone().next() {
+                    Some(b) => load(b, BLOCK - LANES),
+                    None => {
+                        let (prev, valid) = before(blocks_front);
+                        cand &= valid;
+                        prev
+                    }
+                },
+            };
+
+            if let Some(lane) = check(prev, cur, cand) {
+                let start = blocks_front.len() + blocks.len() * BLOCK + words.len() * LANES;
+                return Some(start + lane - (N - 1));
+            }
+        }
+    }
+
+    while let Some(block) = blocks.next() {
+        let mut last = 0;
+        for chunk in block.chunks_exact(LANES) {
+            last |= haszero(load(chunk, 0) ^ bc[N - 1]);
+        }
+        if last == 0 {
+            continue;
+        }
+
+        let mut w = [0u64; BLOCK / LANES];
+        for (word, chunk) in w.iter_mut().zip(block.chunks_exact(LANES)) {
+            *word = load(chunk, 0);
+        }
+
+        // The word before each word, where the one before the block ends the
+        // block before it or, for the first block, `front`
+        let (before_block, valid) = match blocks.clone().next() {
+            Some(b) => (load(b, BLOCK - LANES), !0),
+            None => before(blocks_front),
+        };
+        let mut prev = [before_block; BLOCK / LANES];
+        prev[1..].copy_from_slice(&w[..w.len() - 1]);
+
+        // Then filter on the needle's last two bytes
+        let mut any = 0;
+        for i in 0..w.len() {
+            any |= pair(prev[i], w[i]);
+        }
+        if any == 0 {
+            continue;
+        }
+
+        for i in (0..w.len()).rev() {
+            let mut cand = pair(prev[i], w[i]);
+            if i == 0 {
+                cand &= valid;
+            }
+            if cand == 0 {
+                continue;
+            }
+
+            if let Some(lane) = check(prev[i], w[i], cand) {
+                let start = blocks_front.len() + blocks.len() * BLOCK + i * LANES;
+                return Some(start + lane - (N - 1));
+            }
+        }
+    }
+
+    // Then a word at a time through what is left at the front
     //
     // With an MSRV of 1.88, `as_rchunks` yields `&[[u8; LANES]]`, whose
     // iterator steps by a single pointer comparison where `rchunks_exact`
     // re-slices and checks the length. Iterating those with `next_back` and
     // peeking the previous word with `as_slice().last()` took 20-30% less time
-    // than this loop on 1 KiB+ inputs without candidates and 12-25% less on
-    // random bytes.
-    let mut words = haystack.rchunks_exact(LANES);
+    // than a word-at-a-time `rchunks_exact` loop on 1 KiB+ inputs without
+    // candidates and 12-25% less on random bytes.
+    let mut words = blocks_front.rchunks_exact(LANES);
     let front = words.remainder();
     while let Some(cur) = words.next() {
-        let cur = u64::from_le_bytes([
-            cur[0], cur[1], cur[2], cur[3], cur[4], cur[5], cur[6], cur[7],
-        ]);
+        let cur = load(cur, 0);
         let mut cand = haszero(cur ^ bc[N - 1]);
         if cand == 0 {
             continue;
         }
 
-        // The bytes before the first word are `front`, which may be too short
-        // for a needle to end in the word's leading lanes
         let prev = match words.clone().next() {
-            Some(p) => u64::from_le_bytes([p[0], p[1], p[2], p[3], p[4], p[5], p[6], p[7]]),
+            Some(p) => load(p, 0),
             None => {
-                cand &= !0u64 << (8 * (N - 1).saturating_sub(front.len()));
-                front.iter().fold(0, |acc, &b| {
-                    (acc >> 8) | (u64::from(b) << (8 * (LANES - 1)))
-                })
+                let (prev, valid) = before(front);
+                cand &= valid;
+                prev
             }
         };
 
