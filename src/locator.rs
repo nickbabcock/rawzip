@@ -61,11 +61,12 @@ impl ZipLocator {
 
     fn locate_in_byte_slice(&self, data: &[u8]) -> Result<EndOfCentralDirectory, Error> {
         let max_search_space = self.max_search_space.min(data.len() as u64) as usize;
-        let location = find_end_of_central_dir_signature(data, max_search_space)
+        let (before, record) = split_at_end_of_central_dir_signature(data, max_search_space)
             .ok_or(ErrorKind::MissingEndOfCentralDirectory)?;
 
+        let location = before.len();
         let mut eocd = self
-            .locate_in_byte_slice_impl(data, location)
+            .locate_in_byte_slice_impl(data, before, record)
             .map_err(|e| e.with_eocd_offset(location as u64))?;
 
         // Transparently verify that the self reported central directory points
@@ -98,24 +99,27 @@ impl ZipLocator {
         }
     }
 
+    /// Parses the end of central directory record that starts `record`, where
+    /// `before` is the data before it
     fn locate_in_byte_slice_impl(
         &self,
         data: &[u8],
-        location: usize,
+        before: &[u8],
+        record: &[u8],
     ) -> Result<EndOfCentralDirectory, Error> {
-        let eocd = EndOfCentralDirectoryRecordFixed::parse(&data[location..])?;
+        let location = before.len();
+        let eocd = EndOfCentralDirectoryRecordFixed::parse(record)?;
 
         // Validate comment is completely present in the slice
-        let comment_start = location + EndOfCentralDirectoryRecordFixed::SIZE;
-        let comment_len = eocd.comment_len as usize;
-        if comment_start + comment_len > data.len() {
+        let required = EndOfCentralDirectoryRecordFixed::SIZE + usize::from(eocd.comment_len);
+        if record.len() < required {
             return Err(Error::from(ErrorKind::Eof));
         }
 
         // Always probe for a zip64 EOCD locator, which can be present without sentinels
-        let zip64_locator = location
-            .checked_sub(Zip64EndOfCentralDirectoryLocatorRecord::SIZE)
-            .and_then(|start| Zip64EndOfCentralDirectoryLocatorRecord::parse(&data[start..]).ok());
+        let zip64_locator = before
+            .last_chunk::<{ Zip64EndOfCentralDirectoryLocatorRecord::SIZE }>()
+            .and_then(|locator| Zip64EndOfCentralDirectoryLocatorRecord::parse(locator).ok());
 
         let Some(zip64_locator) = zip64_locator else {
             return EndOfCentralDirectory::create(EndOfCentralDirectoryRecord::from_parts(
@@ -431,12 +435,19 @@ fn parse_zip64_candidate(
     consistent.then_some(zip64)
 }
 
-pub(crate) fn find_end_of_central_dir_signature(
+/// Splits `data` at the last end of central directory signature that starts
+/// within its last `max_search_space` bytes
+pub(crate) fn split_at_end_of_central_dir_signature(
     data: &[u8],
     max_search_space: usize,
-) -> Option<usize> {
-    let start_search = data.len().saturating_sub(max_search_space);
-    rfind::<END_OF_CENTRAL_DIR_SIGNATURE>(&data[start_search..]).map(|pos| pos + start_search)
+) -> Option<(&[u8], &[u8])> {
+    let (_, window) = data.split_at(data.len().saturating_sub(max_search_space));
+    let pos = rfind::<END_OF_CENTRAL_DIR_SIGNATURE>(window)?;
+
+    // Measuring the split from the end of `data` keeps it, and every slice of
+    // the record after it, in bounds by construction. `pos` is within
+    // `window`, so this never saturates.
+    Some(data.split_at(data.len().saturating_sub(window.len() - pos)))
 }
 
 /// Finds the last end of central directory signature in `haystack`, for the
