@@ -56,6 +56,15 @@ pub const MAX_CENTRAL_DIRECTORY_RECORD_SIZE: usize =
 /// A [`ZipSliceArchive`] is more efficient and easier to use than a [`ZipArchive`],
 /// as there is no buffer management and memory copying involved.
 ///
+/// # Changes to the data
+///
+/// The archive reads the end-of-central-directory record when it is created
+/// and keeps its offsets and metadata. The bytes returned by `AsRef<[u8]>`
+/// must remain the same while the archive is in use.
+///
+/// If the data changes, the stored information can become invalid. Methods may
+/// return errors or incorrect data. To read changed data, create a new archive.
+///
 /// # Examples
 ///
 /// ```rust
@@ -86,7 +95,16 @@ impl<T: AsRef<[u8]>> ZipSliceArchive<T> {
     pub fn entries(&self) -> ZipSliceEntries<'_> {
         let data = self.data.as_ref();
         let directory_start = self.eocd.directory_offset();
-        let entry_data = &data[(directory_start as usize)..self.eocd.head_eocd_offset() as usize];
+        // The data may be shorter than the data used by the locator. Use a
+        // checked conversion and a checked range to avoid a panic path and
+        // offsets that wrap on 32-bit targets. If the range is invalid, one
+        // byte makes the first entry return an `Eof` error instead of ending
+        // iteration without an error.
+        let entry_data = usize::try_from(directory_start)
+            .ok()
+            .zip(usize::try_from(self.eocd.head_eocd_offset()).ok())
+            .and_then(|(start, end)| data.get(start..end))
+            .unwrap_or(&[0]);
         ZipSliceEntries {
             entry_data,
             base_offset: self.eocd.base_offset(),
@@ -143,16 +161,20 @@ impl<T: AsRef<[u8]>> ZipSliceArchive<T> {
     pub fn end_offset(&self) -> u64 {
         self.eocd.tail_eocd_offset()
             + EndOfCentralDirectoryRecordFixed::SIZE as u64
-            + self.comment().as_bytes().len() as u64
+            + self.eocd.comment_len() as u64
     }
 
     /// The comment of the zip file.
     pub fn comment(&self) -> ZipStr<'_> {
         let data = self.data.as_ref();
-        let comment_start =
-            self.eocd.tail_eocd_offset() as usize + EndOfCentralDirectoryRecordFixed::SIZE;
-        let comment_len = self.eocd.comment_len();
-        ZipStr::new(&data[comment_start..comment_start + comment_len])
+        // An `AsRef` implementation can return different data than the
+        // locator verified. Data that does not hold the comment has no comment.
+        let comment = usize::try_from(self.eocd.tail_eocd_offset())
+            .ok()
+            .and_then(|tail| tail.checked_add(EndOfCentralDirectoryRecordFixed::SIZE))
+            .and_then(|start| data.get(start..)?.get(..self.eocd.comment_len()))
+            .unwrap_or_default();
+        ZipStr::new(comment)
     }
 
     /// Converts the [`ZipSliceArchive`] into a general [`ZipArchive`] by
@@ -386,8 +408,10 @@ impl<'data> ZipSliceEntries<'data> {
             Ok(file_header) => file_header,
             Err(err) => return self.next_entry_terminator(err),
         };
-        let Some((file_name, extra_field, file_comment, entry_data)) =
-            file_header.parse_variable_length(&self.entry_data[ZipFileHeaderFixed::SIZE..])
+        let Some((file_name, extra_field, file_comment, entry_data)) = self
+            .entry_data
+            .get(ZipFileHeaderFixed::SIZE..)
+            .and_then(|rest| file_header.parse_variable_length(rest))
         else {
             return Err(Error::from(ErrorKind::Eof));
         };
@@ -450,6 +474,16 @@ impl core::iter::FusedIterator for ZipSliceEntries<'_> {}
 )]
 ///
 /// For more complex use cases, use the [`ZipLocator`] to locate an archive.
+///
+/// # Changes to the data
+///
+/// The archive reads the end-of-central-directory record when it is created
+/// and keeps its offsets and metadata. The data in the underlying reader must
+/// remain the same while the archive is in use. This also applies to changes
+/// made through another handle to the same file.
+///
+/// If the data changes, the stored information can become invalid. Methods may
+/// return errors or incorrect data. To read changed data, create a new archive.
 #[cfg_attr(
     feature = "std",
     doc = r#"
@@ -1589,9 +1623,9 @@ impl ZipFileHeaderFixed {
 
     #[inline]
     pub fn parse(data: &[u8]) -> Result<ZipFileHeaderFixed, Error> {
-        if data.len() < Self::SIZE {
+        let Some(data) = data.first_chunk::<{ Self::SIZE }>() else {
             return Err(Error::from(ErrorKind::Eof));
-        }
+        };
 
         let result = ZipFileHeaderFixed {
             signature: le_u32(&data[0..4]),
@@ -1625,20 +1659,9 @@ impl ZipFileHeaderFixed {
 
     #[inline]
     fn parse_variable_length<'a>(&self, data: &'a [u8]) -> Option<VariableFields<'a>> {
-        if data.len() < self.file_name_len as usize {
-            return None;
-        }
-        let (file_name, rest) = data.split_at(self.file_name_len as usize);
-
-        if rest.len() < self.extra_field_len as usize {
-            return None;
-        }
-        let (extra_field, rest) = rest.split_at(self.extra_field_len as usize);
-
-        if rest.len() < self.file_comment_len as usize {
-            return None;
-        }
-        let (file_comment, rest) = rest.split_at(self.file_comment_len as usize);
+        let (file_name, rest) = data.split_at_checked(usize::from(self.file_name_len))?;
+        let (extra_field, rest) = rest.split_at_checked(usize::from(self.extra_field_len))?;
+        let (file_comment, rest) = rest.split_at_checked(usize::from(self.file_comment_len))?;
 
         Some((file_name, extra_field, file_comment, rest))
     }
