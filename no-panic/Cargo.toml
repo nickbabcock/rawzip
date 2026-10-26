@@ -1,0 +1,27 @@
+[package]
+publish = false
+name = "rawzip-no-panic"
+version = "0.0.1"
+description = "Proves that rawzip reads a slice without panic paths."
+license = "MIT"
+edition = "2024"
+
+[workspace]
+
+[dependencies]
+rawzip = { path = "..", default-features = false }
+
+[features]
+default = ["locate", "entries", "data"]
+locate = []
+entries = ["locate"]
+data = ["entries"]
+# Has a panic path, to show that the check can fail
+canary = []
+
+[profile.dev]
+panic = "abort"
+
+[profile.release]
+panic = "abort"
+debug = true
