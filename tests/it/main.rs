@@ -1514,3 +1514,44 @@ fn iterates_past_undercounted_eocd() {
     }
     assert_eq!(actual, 3);
 }
+
+#[derive(Debug)]
+struct ShrinkingBuffer {
+    data: Vec<u8>,
+    shrunk: Cell<bool>,
+}
+
+impl AsRef<[u8]> for ShrinkingBuffer {
+    fn as_ref(&self) -> &[u8] {
+        if self.shrunk.get() {
+            &self.data[..4]
+        } else {
+            &self.data
+        }
+    }
+}
+
+#[test]
+fn slice_archive_does_not_panic_when_data_shrinks() {
+    let data = std::fs::read("assets/test.zip").unwrap();
+    let archive = ZipArchive::from_slice(ShrinkingBuffer {
+        data,
+        shrunk: Cell::new(false),
+    })
+    .unwrap();
+    let entry = archive.entries().next_entry().unwrap().unwrap();
+    let end_offset = archive.end_offset();
+    assert_eq!(end_offset, archive.get_ref().data.len() as u64);
+    assert_eq!(archive.comment().as_bytes(), b"This is a zipfile comment.");
+    archive.get_ref().shrunk.set(true);
+
+    let mut entries = archive.entries();
+    let err = entries.next_entry().unwrap_err();
+    assert!(matches!(err.kind(), ErrorKind::Eof));
+    assert!(entries.next_entry().unwrap().is_none());
+
+    let err = archive.get_entry(entry.wayfinder()).unwrap_err();
+    assert!(matches!(err.kind(), ErrorKind::Eof));
+    assert_eq!(archive.comment().as_bytes(), b"");
+    assert_eq!(archive.end_offset(), end_offset);
+}
