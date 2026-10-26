@@ -406,7 +406,7 @@ where
 
         reader.read_exact_at(haystack, chunk_start)?;
 
-        if let Some(i) = rfind::<END_OF_CENTRAL_DIR_SIGNATURE>(haystack) {
+        if let Some(i) = rfind_end_of_central_dir_signature(haystack) {
             return Ok(Some((chunk_start + i as u64, i, read_size)));
         }
 

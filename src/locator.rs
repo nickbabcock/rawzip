@@ -439,6 +439,19 @@ pub(crate) fn find_end_of_central_dir_signature(
     rfind::<END_OF_CENTRAL_DIR_SIGNATURE>(&data[start_search..]).map(|pos| pos + start_search)
 }
 
+/// Finds the last end of central directory signature in `haystack`, for the
+/// reader locator.
+///
+/// This search is not inlined. When it was, the generic reader locator became
+/// larger, and the optimizer then inlined less of the reader's central
+/// directory iteration. The slice locator inlines [`rfind`], as a call costs
+/// more than the search of a short slice.
+#[cfg(feature = "std")]
+#[inline(never)]
+pub(crate) fn rfind_end_of_central_dir_signature(haystack: &[u8]) -> Option<usize> {
+    rfind::<END_OF_CENTRAL_DIR_SIGNATURE>(haystack)
+}
+
 /// Finds the last occurrence of the 4-byte little-endian `NEEDLE` in `haystack`.
 ///
 /// Some benchmarks:
@@ -446,68 +459,162 @@ pub(crate) fn find_end_of_central_dir_signature(
 /// - windows().rposition(): 2 GiB/s (complete data independence as it's just loop of u32 loads)
 /// - `memmem::rfind`: 8.4 GiB/s (586 MiB/s worst case)
 /// - This implementation: 16.0 GiB/s (4.63 GiB/s worst case)
+///
+/// Each load is from an array that is split from the end of the haystack, at
+/// an offset within the array, so the search has no panic paths.
+#[inline(always)]
 fn rfind<const NEEDLE: u32>(haystack: &[u8]) -> Option<usize> {
     const N: usize = core::mem::size_of::<u32>();
+
+    // SWAR lanes
+    const LANES: usize = core::mem::size_of::<u64>();
+    const LO: u64 = u64::from_ne_bytes([0x01; LANES]);
+    const LO7: u64 = u64::from_ne_bytes([0x7F; LANES]);
+    const HI: u64 = u64::from_ne_bytes([0x80; LANES]);
+
+    #[inline(always)]
+    fn haszero(word: u64) -> u64 {
+        word.wrapping_sub(LO) & !word & HI
+    }
+
+    #[inline(always)]
+    fn iszero(word: u64) -> u64 {
+        !(((word & LO7) + LO7) | word) & HI
+    }
+
+    // Loads the word at `at` as one load. Byte-wise loads let the optimizer
+    // share the bytes that overlapping words have in common, and it then
+    // assembles each word a byte at a time.
+    #[inline(always)]
+    fn word_at<const L: usize>(tail: &[u8; L], at: usize) -> u64 {
+        tail.get(at..)
+            .and_then(<[u8]>::first_chunk::<LANES>)
+            .map_or(0, |word| u64::from_le_bytes(*word))
+    }
+
+    // Returns the end of the last needle that ends in the word at `at`. The
+    // needle's other bytes are loaded from the word before, so `at` is at
+    // least a word into `tail`, and each load is at a fixed offset from it.
+    #[inline(always)]
+    fn check<const L: usize>(tail: &[u8; L], at: usize, bc: &[u64; N]) -> Option<usize> {
+        let cur = word_at(tail, at);
+        let cand = haszero(cur ^ bc[N - 1]);
+
+        // Common case: no candidate last byte, or no aligned first byte
+        let w0 = word_at(tail, at - (N - 1));
+        if cand == 0 || cand & haszero(w0 ^ bc[0]) == 0 {
+            return None;
+        }
+
+        // Survivors should be rare but let's check the middle bytes
+        let w1 = word_at(tail, at - (N - 2));
+        let w2 = word_at(tail, at - (N - 3));
+        if haszero(w1 ^ bc[1]) & haszero(w2 ^ bc[2]) == 0 {
+            return None;
+        }
+
+        // Confirm all lanes at once with the four exact byte planes.
+        let matches =
+            iszero(cur ^ bc[N - 1]) & iszero(w0 ^ bc[0]) & iszero(w1 ^ bc[1]) & iszero(w2 ^ bc[2]);
+
+        // highest set bit is the last match
+        (matches != 0).then(|| at + matches.ilog2() as usize / 8 + 1)
+    }
+
+    // The fast path scans backwards a block at a time. `tail` is a block and
+    // the word before it, split from the end of the data left to search.
+    const BLOCK: usize = 8 * LANES;
+    const TAIL: usize = BLOCK + LANES;
+    const PAIR: usize = 2 * LANES;
+
+    // Returns the end of the last needle that ends in the block
+    #[inline(always)]
+    fn scan(tail: &[u8; TAIL], bc: &[u64; N]) -> Option<usize> {
+        (0..BLOCK / LANES)
+            .rev()
+            .find_map(|i| check(tail, LANES + i * LANES, bc))
+    }
+
+    // Returns if a needle can end in the block, from the needle's last byte,
+    // then from its last two bytes, which are rarer together
+    #[inline(always)]
+    fn candidates(tail: &[u8; TAIL], bc: &[u64; N]) -> bool {
+        let mut last = 0;
+        for at in (LANES..TAIL).step_by(LANES) {
+            last |= haszero(word_at(tail, at) ^ bc[N - 1]);
+        }
+        if last == 0 {
+            return false;
+        }
+
+        let mut pair = 0;
+        for at in (LANES..TAIL).step_by(LANES) {
+            pair |=
+                haszero(word_at(tail, at) ^ bc[N - 1]) & haszero(word_at(tail, at - 1) ^ bc[N - 2]);
+        }
+        pair != 0
+    }
+
+    // Searches a word at a time, then the last bytes one at a time
+    #[inline(always)]
+    fn words(mut head: &[u8], bc: &[u64; N], needle: u32) -> Option<usize> {
+        while let Some((_, tail)) = head.split_last_chunk::<PAIR>() {
+            if let Some(end) = check(tail, LANES, bc) {
+                return Some(head.len() + end - PAIR - N);
+            }
+            (head, _) = head.split_at(head.len().saturating_sub(LANES));
+        }
+
+        head.windows(N).rposition(|window| le_u32(window) == needle)
+    }
+
+    // Filters the blocks, then searches what is left. This loop is not inlined,
+    // as it takes more instructions in a larger function. It runs only when a
+    // block is left, so the call is a small part of its time.
+    #[inline(never)]
+    fn blocks(mut head: &[u8], bc: &[u64; N], needle: u32) -> Option<usize> {
+        while let Some((_, tail)) = head.split_last_chunk::<TAIL>() {
+            if candidates(tail, bc) {
+                if let Some(end) = scan(tail, bc) {
+                    return Some(head.len() + end - TAIL - N);
+                }
+            }
+            (head, _) = head.split_at(head.len().saturating_sub(BLOCK));
+        }
+
+        words(head, bc, needle)
+    }
+
     if haystack.len() < N {
         return None;
     }
 
-    // The fast path scans backwards for the needle's last byte as a candidate
-    let search = &haystack[N - 1..];
-
-    // SWAR lanes
-    const LANES: usize = core::mem::size_of::<u64>();
-    let lo = u64::from_ne_bytes([0x01; LANES]);
-    let lo7 = u64::from_ne_bytes([0x7F; LANES]);
-    let hi = u64::from_ne_bytes([0x80; LANES]);
-
-    let haszero = |word: u64| word.wrapping_sub(lo) & !word & hi;
-    let iszero = |word: u64| !(((word & lo7) + lo7) | word) & hi;
     let bytes = NEEDLE.to_le_bytes();
     let bc = bytes.map(|x| u64::from_ne_bytes([x; LANES]));
 
-    let load = |at: usize| -> u64 {
-        let c = &haystack[at..at + LANES];
-        u64::from_le_bytes([c[0], c[1], c[2], c[3], c[4], c[5], c[6], c[7]])
-    };
-
-    let mut chunks = search.rchunks_exact(LANES);
-    let mut start = search.len();
-    for c in chunks.by_ref() {
-        start -= LANES;
-        let word = u64::from_le_bytes([c[0], c[1], c[2], c[3], c[4], c[5], c[6], c[7]]);
-        let cand = haszero(word ^ bc[N - 1]);
-
-        // Common case: no candidate last byte, or no aligned first byte
-        if cand == 0 || cand & haszero(load(start) ^ bc[0]) == 0 {
-            continue;
+    // A match is most often in the last block, as an end of central directory
+    // record with no or a short comment, so it is checked before blocks are
+    // filtered
+    let mut head = haystack;
+    if let Some((_, tail)) = head.split_last_chunk::<TAIL>() {
+        if let Some(end) = scan(tail, &bc) {
+            // The match ends at the same distance from the end of `head` as
+            // from the end of `tail`
+            return Some(head.len() + end - TAIL - N);
         }
-
-        // Survivors should be rare but let's check the middle bytes
-        if haszero(load(start + 1) ^ bc[1]) & haszero(load(start + 2) ^ bc[2]) == 0 {
-            continue;
-        }
-
-        // Confirm all lanes at once with the four exact byte planes.
-        let matches = iszero(word ^ bc[N - 1])
-            & iszero(load(start) ^ bc[0])
-            & iszero(load(start + 1) ^ bc[1])
-            & iszero(load(start + 2) ^ bc[2]);
-
-        if matches != 0 {
-            // highest set bit is the last match
-            return Some(start + matches.ilog2() as usize / 8);
+        (head, _) = head.split_at(head.len().saturating_sub(BLOCK));
+        if head.len() >= TAIL {
+            return blocks(head, &bc, NEEDLE);
         }
     }
 
-    haystack[..chunks.remainder().len() + N - 1]
-        .windows(N)
-        .rposition(|window| le_u32(window) == NEEDLE)
+    words(head, &bc, NEEDLE)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use quickcheck::{Arbitrary, Gen};
     use quickcheck_macros::quickcheck;
     use rstest::rstest;
 
@@ -520,12 +627,104 @@ mod tests {
         assert_eq!(rfind::<END_OF_CENTRAL_DIR_SIGNATURE>(input), expected);
     }
 
+    /// A haystack long enough to reach the block filter. The default `Vec`
+    /// is shorter than 100 bytes, so it cannot.
+    #[derive(Clone, Debug)]
+    struct Haystack(Vec<u8>);
+
+    impl Arbitrary for Haystack {
+        fn arbitrary(g: &mut Gen) -> Self {
+            let len = usize::arbitrary(g) % 1024;
+
+            // Random bytes seldom hold the signature, so a dense haystack
+            // makes each byte one of the signature's bytes or a zero, which
+            // gives matches and near misses at all offsets
+            let dense = bool::arbitrary(g);
+            let data = (0..len)
+                .map(|_| {
+                    let b = u8::arbitrary(g);
+                    match dense {
+                        true => END_OF_CENTRAL_DIR_SIGNATURE_BYTES
+                            .get(usize::from(b % 5))
+                            .copied()
+                            .unwrap_or(0),
+                        false => b,
+                    }
+                })
+                .collect();
+            Haystack(data)
+        }
+
+        fn shrink(&self) -> Box<dyn Iterator<Item = Self>> {
+            Box::new(self.0.shrink().map(Haystack))
+        }
+    }
+
     #[quickcheck]
-    fn test_rfind_matches_windows_rposition(data: Vec<u8>) {
+    fn test_rfind_matches_windows_rposition(data: Haystack) {
+        assert_rfind_matches_windows_rposition(&data.0, "random haystack");
+    }
+
+    // The longest haystack in the exhaustive tests. It spans the last block,
+    // two filtered blocks, and each length of the word search after them.
+    const EXHAUSTIVE_LEN: usize = 5 * 64;
+
+    fn assert_rfind_matches_windows_rposition(data: &[u8], context: &str) {
         let expected = data
             .windows(END_OF_CENTRAL_DIR_SIGNATURE_BYTES.len())
             .rposition(|window| window == END_OF_CENTRAL_DIR_SIGNATURE_BYTES);
 
-        assert_eq!(rfind::<END_OF_CENTRAL_DIR_SIGNATURE>(&data), expected);
+        assert_eq!(
+            rfind::<END_OF_CENTRAL_DIR_SIGNATURE>(data),
+            expected,
+            "{context}"
+        );
+    }
+
+    fn filled(fill: &[u8], len: usize) -> Vec<u8> {
+        fill.iter().copied().cycle().take(len).collect()
+    }
+
+    // Each fill passes one more of the search's filters before it rejects the
+    // fill
+    #[rstest]
+    #[case::zeros(&[0x00])]
+    #[case::last_byte(&[0x06])]
+    #[case::last_two_bytes(&[0x05, 0x06])]
+    #[case::first_and_last_bytes(&[0x50, 0x00, 0x00, 0x06])]
+    #[case::all_but_one_byte(&[0x50, 0x00, 0x05, 0x06])]
+    fn test_rfind_signature_at_each_offset(#[case] fill: &[u8]) {
+        let sig = END_OF_CENTRAL_DIR_SIGNATURE_BYTES;
+        for len in 0..=EXHAUSTIVE_LEN {
+            let mut data = filled(fill, len);
+            assert_rfind_matches_windows_rposition(&data, &format!("len {len}"));
+
+            for pos in 0..len.saturating_sub(sig.len() - 1) {
+                data[pos..pos + sig.len()].copy_from_slice(&sig);
+                assert_rfind_matches_windows_rposition(&data, &format!("len {len}, pos {pos}"));
+                data.copy_from_slice(&filled(fill, len));
+            }
+        }
+    }
+
+    // The search must return the last of two matches at each pair of offsets
+    #[rstest]
+    #[case::zeros(&[0x00])]
+    #[case::all_but_one_byte(&[0x50, 0x00, 0x05, 0x06])]
+    fn test_rfind_last_of_two_signatures(#[case] fill: &[u8]) {
+        let sig = END_OF_CENTRAL_DIR_SIGNATURE_BYTES;
+        let empty = filled(fill, EXHAUSTIVE_LEN);
+        let mut data = empty.clone();
+        for first in 0..=EXHAUSTIVE_LEN - 2 * sig.len() {
+            for last in first + sig.len()..=EXHAUSTIVE_LEN - sig.len() {
+                data[first..first + sig.len()].copy_from_slice(&sig);
+                data[last..last + sig.len()].copy_from_slice(&sig);
+                assert_rfind_matches_windows_rposition(
+                    &data,
+                    &format!("first {first}, last {last}"),
+                );
+                data.copy_from_slice(&empty);
+            }
+        }
     }
 }
