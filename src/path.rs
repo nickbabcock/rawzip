@@ -295,7 +295,7 @@ where
     }
 }
 
-#[cfg(any(feature = "std", test))]
+#[cfg(any(feature = "std", all(test, feature = "alloc")))]
 pub(crate) fn str_needs_utf8(s: &str) -> bool {
     for ch in s.chars() {
         let code_point = ch as u32;
@@ -397,7 +397,7 @@ impl<'a> ZipFilePath<NormalizedPath<'a>> {
     /// Normalization collapses any run of trailing separators into a single
     /// `/`, so removing one slash is sufficient. The original borrow is
     /// preserved when possible.
-    #[cfg(any(feature = "std", test))]
+    #[cfg(feature = "std")]
     #[inline]
     pub(crate) fn trim_trailing_slash(self) -> ZipFilePath<NormalizedPath<'a>> {
         let data = match self.data.0 {

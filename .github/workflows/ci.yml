@@ -111,6 +111,8 @@ jobs:
         components: clippy
         targets: wasm32-unknown-unknown
     - run: cargo clippy --all-targets -- -D warnings
+    - run: cargo clippy --no-default-features --all-targets -- -D warnings
+    - run: cargo clippy --no-default-features --features alloc --all-targets -- -D warnings
     - run: cargo clippy --target wasm32-unknown-unknown -- -D warnings
     - run: cargo clippy --manifest-path bench/Cargo.toml --all-targets -- -D warnings
     - run: cargo clippy --manifest-path compare/Cargo.toml --all-targets -- -D warnings
@@ -174,6 +176,8 @@ jobs:
 
   no-std:
     runs-on: ubuntu-latest
+    env:
+      RUSTFLAGS: "-D warnings"
     steps:
       - name: Checkout repository
         uses: actions/checkout@v7

@@ -71,6 +71,7 @@ pub struct VersionMadeBy(u16);
 impl VersionMadeBy {
     /// Builds a value from a creator system and a ZIP specification version (in
     /// tenths, e.g. `20` for version 2.0).
+    #[cfg(any(feature = "std", test))]
     #[inline]
     pub(crate) const fn new(system: CreatorSystem, zip_version: u8) -> Self {
         Self(((system.as_u8() as u16) << 8) | zip_version as u16)
