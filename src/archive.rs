@@ -183,24 +183,21 @@ impl<T: AsRef<[u8]>> ZipSliceArchive<T> {
         let file_header = ZipLocalFileHeaderFixed::parse(header)?;
         let variable_length = file_header.variable_length();
 
-        let header_size = (ZipLocalFileHeaderFixed::SIZE + variable_length) as u32;
-        let (total_size, o1) =
-            (u64::from(header_size)).overflowing_add(entry.compressed_size_hint());
-
-        if o1 || (header.len() as u64) < total_size {
-            return Err(Error::from(ErrorKind::Eof));
-        }
-
-        let (entire_entry, descriptor) = header.split_at(total_size as usize);
+        let header_size = ZipLocalFileHeaderFixed::SIZE + variable_length;
+        let (local_header, rest) = header.split_at_checked(header_size).ok_or(ErrorKind::Eof)?;
+        let (data, descriptor) = usize::try_from(entry.compressed_size_hint())
+            .ok()
+            .and_then(|len| rest.split_at_checked(len))
+            .ok_or(ErrorKind::Eof)?;
 
         Ok(ZipSliceEntry {
-            data: entire_entry,
+            local_header,
+            data,
             verifier: ZipVerification {
                 crc: entry.crc,
                 uncompressed_size: entry.uncompressed_size_hint(),
             },
             local_header_offset: entry.local_header_offset,
-            data_start_offset: header_size,
             has_data_descriptor: entry.has_data_descriptor,
             data_descriptor_uses_zip64_sizes: entry.data_descriptor_uses_zip64_sizes,
             descriptor,
@@ -213,12 +210,12 @@ impl<T: AsRef<[u8]>> ZipSliceArchive<T> {
 /// It provides access to the raw compressed data of the entry.
 #[derive(Debug, Clone)]
 pub struct ZipSliceEntry<'a> {
-    // From local header offset to end of compressed data
+    // Local file header, including the file name and extra field
+    local_header: &'a [u8],
+    // Compressed data
     data: &'a [u8],
     verifier: ZipVerification,
     local_header_offset: u64,
-    // self.data[self.data_start_offset] is the start of compressed data
-    data_start_offset: u32,
     has_data_descriptor: bool,
     data_descriptor_uses_zip64_sizes: bool,
     descriptor: &'a [u8],
@@ -227,7 +224,7 @@ pub struct ZipSliceEntry<'a> {
 impl<'a> ZipSliceEntry<'a> {
     /// Returns the raw, compressed data of the entry as a byte slice.
     pub fn data(&self) -> &'a [u8] {
-        &self.data[self.data_start_offset as usize..]
+        self.data
     }
 
     /// Returns the expected CRC and uncompressed size of the inflated data.
@@ -309,9 +306,8 @@ impl<'a> ZipSliceEntry<'a> {
     /// # }
     /// ```
     pub fn compressed_data_range(&self) -> (u64, u64) {
-        let compressed_data_start = self.local_header_offset + self.data_start_offset as u64;
-        let compressed_data_end =
-            compressed_data_start + (self.data.len() - self.data_start_offset as usize) as u64;
+        let compressed_data_start = self.local_header_offset + self.local_header.len() as u64;
+        let compressed_data_end = compressed_data_start + self.data.len() as u64;
         (compressed_data_start, compressed_data_end)
     }
 
@@ -334,21 +330,21 @@ impl<'a> ZipSliceEntry<'a> {
     /// # }
     /// ```
     pub fn local_header(&self) -> ZipLocalFileHeader<'a> {
-        let header =
-            ZipLocalFileHeaderFixed::parse(self.data).expect("header has already been parsed");
+        let header = ZipLocalFileHeaderFixed::parse(self.local_header)
+            .expect("header has already been parsed");
         let file_name_len = header.file_name_len as usize;
         let extra_field_len = header.extra_field_len as usize;
         let filename_start = ZipLocalFileHeaderFixed::SIZE;
         let filename_end = filename_start + file_name_len;
         let extra_field_end = filename_end + extra_field_len;
         let (compressed_size, uncompressed_size) =
-            local_header_size_hints(&header, &self.data[filename_end..extra_field_end]);
+            local_header_size_hints(&header, &self.local_header[filename_end..extra_field_end]);
         ZipLocalFileHeader {
             fixed: header,
             compressed_size,
             uncompressed_size,
-            file_path: ZipFilePath::from_bytes(&self.data[filename_start..filename_end]),
-            extra_field: &self.data[filename_end..extra_field_end],
+            file_path: ZipFilePath::from_bytes(&self.local_header[filename_start..filename_end]),
+            extra_field: &self.local_header[filename_end..extra_field_end],
         }
     }
 }
