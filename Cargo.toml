@@ -17,6 +17,34 @@ default = ["std"]
 alloc = []
 std = ["alloc"]
 
+[[example]]
+name = "big"
+required-features = ["std"]
+
+[[example]]
+name = "extract"
+required-features = ["std"]
+
+[[example]]
+name = "list"
+required-features = ["std"]
+
+[[example]]
+name = "passthrough"
+required-features = ["std"]
+
+[[example]]
+name = "read"
+required-features = ["std"]
+
+[[example]]
+name = "write"
+required-features = ["std"]
+
+[[test]]
+name = "it"
+required-features = ["std"]
+
 [dependencies]
 
 [dev-dependencies]
