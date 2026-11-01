@@ -1,3 +1,7 @@
+## Unreleased
+
+Fix reads that failed on an `Interrupted` error (for example, `EINTR` from a signal). The default `ReaderAt::read_exact_at` and the internal reads of rawzip now call `read_at` again, as `std::io::Read::read_exact` does. This affects `FileReader`.
+
 ## v0.5.2 - October 4th, 2026
 
 Fix central directory iteration that did not end after a parse error. The slice `Iterator` and the reader `next_entry` returned the same error forever, so callers that skip errors (for example, `filter_map(Result::ok)`) did not stop. An error now ends iteration, and `ZipSliceEntries` implements `FusedIterator`.
