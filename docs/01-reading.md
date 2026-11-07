@@ -128,24 +128,27 @@ assert_eq!(entry.file_path().try_normalize()?.as_ref(), "first.txt");
 ## False EOCD signatures
 
 A zip comment or trailing data can contain the EOCD byte sequence by chance. If
-the locator tries that false signature first, use the offset on the resulting
-[`Error`][crate::Error] to resume searching before it:
+the locator tries that false signature first, the resulting
+[`Error`][crate::Error] gives its offset. Give that offset to
+[`ZipLocator::locate_in_slice_with_end`][crate::ZipLocator::locate_in_slice_with_end]
+to search the data before it:
 
 ```rust
-use rawzip::ZipLocator;
+use rawzip::{ZipArchiveWriter, ZipLocator};
 
-// Simulate trailing data that happens to contain an EOCD signature.
-let mut data = std::fs::read("assets/test.zip")?;
-data.extend_from_slice(b"trailing data: ");
-data.extend_from_slice(&0x0605_4b50_u32.to_le_bytes());
-data.extend_from_slice(b" not an EOCD");
+// Simulate a comment that contains an EOCD signature.
+let comment = b"a comment with a false signature: PK\x05\x06";
+let mut data = Vec::new();
+let mut archive = ZipArchiveWriter::new(&mut data);
+archive.set_comment(comment);
+archive.finish()?;
 
 let locator = ZipLocator::new();
-let mut end = data.len();
+let mut end = data.len() as u64;
 let mut false_signatures = 0;
 
 let archive = loop {
-    match locator.locate_in_slice(&data[..end]) {
+    match locator.locate_in_slice_with_end(&data, end) {
         Ok(archive) => break archive,
         Err((_, error)) => {
             // eocd_offset points at the false signature. Exclude it from the
@@ -160,14 +163,58 @@ let archive = loop {
                 println!("suspicious zip ...")
             }
 
-            end = false_eocd as usize;
+            end = false_eocd;
         }
     }
 };
 
-assert_eq!(archive.entries_hint(), 2);
+assert_eq!(archive.comment().as_bytes(), comment);
 # Ok::<(), Box<dyn std::error::Error>>(())
 ```
+
+For a reader, give the same `end_offset` to
+[`ZipLocator::locate_in_reader`][crate::ZipLocator::locate_in_reader]. To recover
+a file, wrap it in a [`FileReader`][crate::FileReader]:
+
+```rust
+use rawzip::{FileReader, ZipLocator};
+# let path = std::env::temp_dir().join(format!("rawzip-false-eocd-{}.zip", std::process::id()));
+# let comment = b"a comment with a false signature: PK\x05\x06";
+# let mut data = Vec::new();
+# let mut writer = rawzip::ZipArchiveWriter::new(&mut data);
+# writer.set_comment(comment);
+# writer.finish()?;
+# std::fs::write(&path, &data)?;
+
+let file = std::fs::File::open(&path)?;
+let mut end = file.metadata()?.len();
+let mut reader = FileReader::from(file);
+let mut buffer = vec![0u8; rawzip::RECOMMENDED_BUFFER_SIZE];
+let locator = ZipLocator::new();
+
+let archive = loop {
+    match locator.locate_in_reader(reader, &mut buffer, end) {
+        Ok(archive) => break archive,
+        Err((returned, error)) => {
+            let Some(false_eocd) = error.eocd_offset() else {
+                return Err(error.into());
+            };
+            reader = returned;
+            end = false_eocd;
+        }
+    }
+};
+
+assert_eq!(archive.comment().remaining() as usize, comment.len());
+# std::fs::remove_file(&path)?;
+# Ok::<(), Box<dyn std::error::Error>>(())
+```
+
+A false record can also parse. The locator then returns `Ok` with the false
+archive, and these loops accept it. No single check finds all false records: a
+comment can contain a complete zip archive. If your application does not accept
+the archive, give its
+[`eocd_offset`][crate::ZipSliceArchive::eocd_offset] as the next end offset.
 
 The same
 [`eocd_offset`][crate::ZipArchive::eocd_offset],
