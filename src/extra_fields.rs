@@ -44,7 +44,7 @@ impl ExtraFieldId {
     pub const ANDROID_ZIP_ALIGNMENT: Self = Self(0xD935);
     pub const MACINTOSH: Self = Self(0x07c8);
     pub const ACORN_SPARKFS: Self = Self(0x4341);
-    pub const WINDOWS_NT_SECURITY_DESCRIPTOR: Self = Self(0x4653);
+    pub const WINDOWS_NT_SECURITY_DESCRIPTOR: Self = Self(0x4453);
     pub const AOS_VS_ACL: Self = Self(0x5356);
     pub const INFO_ZIP_UNICODE_COMMENT: Self = Self(0x6375);
     pub const INFO_ZIP_UNICODE_PATH: Self = Self(0x7075);
