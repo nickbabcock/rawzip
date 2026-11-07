@@ -22,10 +22,14 @@ const END_OF_CENTRAL_DIR_MAX_OFFSET: u64 = 1 << 20;
 /// The `ZipLocator` is responsible for finding the EOCD record, which is
 /// crucial for reading the contents of a ZIP file.
 ///
-/// In the event, that the comment or tailing data contains the EOCD signature,
-/// causing the zip locator to fail to parse. One can reparse the data starting
-/// from the false EOCD offset using the reported offset
-/// [`Error::eocd_offset()`]
+/// The comment or trailing data can contain the EOCD signature. This false
+/// signature can cause the zip locator to fail. If it does, give the offset from
+/// [`Error::eocd_offset()`] to [`ZipLocator::locate_in_slice_with_end`]. That
+/// method searches the data before the false signature.
+#[cfg_attr(
+    feature = "std",
+    doc = "[`ZipLocator::locate_in_reader`] takes the same offset as its `end_offset`."
+)]
 #[derive(Debug)]
 pub struct ZipLocator {
     max_search_space: u64,
@@ -59,9 +63,15 @@ impl ZipLocator {
         self
     }
 
-    fn locate_in_byte_slice(&self, data: &[u8]) -> Result<EndOfCentralDirectory, Error> {
-        let max_search_space = self.max_search_space.min(data.len() as u64) as usize;
-        let location = find_end_of_central_dir_signature(data, max_search_space)
+    /// Parses the last EOCD record with a signature that ends at or before
+    /// `end`. The record and its comment can extend past `end`.
+    fn locate_in_byte_slice(
+        &self,
+        data: &[u8],
+        end: usize,
+    ) -> Result<EndOfCentralDirectory, Error> {
+        let max_search_space = self.max_search_space.min(end as u64) as usize;
+        let location = find_end_of_central_dir_signature(&data[..end], max_search_space)
             .ok_or(ErrorKind::MissingEndOfCentralDirectory)?;
 
         let mut eocd = self
@@ -179,7 +189,53 @@ impl ZipLocator {
         &self,
         data: T,
     ) -> Result<ZipSliceArchive<T>, (T, Error)> {
-        match self.locate_in_byte_slice(data.as_ref()) {
+        let end_offset = data.as_ref().len() as u64;
+        self.locate_in_slice_with_end(data, end_offset)
+    }
+
+    /// Locates the EOCD record with a signature that ends at or before
+    /// `end_offset`.
+    ///
+    /// Use this method to continue a search after a false EOCD signature. Give
+    /// the offset of the false signature as `end_offset`. The search then
+    /// ignores that signature and all data after it.
+    ///
+    /// The record and its comment can extend past `end_offset`, and the
+    /// archive keeps all of `data`.
+    ///
+    /// The maximum search space applies backwards from `end_offset`. An
+    /// `end_offset` past the end of `data` is the same as the end of `data`.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use rawzip::{ZipArchiveWriter, ZipLocator};
+    ///
+    /// // The comment contains the bytes of an EOCD signature.
+    /// let comment = b"false signature: PK\x05\x06";
+    /// let mut data = Vec::new();
+    /// let mut archive = ZipArchiveWriter::new(&mut data);
+    /// archive.set_comment(comment);
+    /// archive.finish()?;
+    ///
+    /// let locator = ZipLocator::new();
+    /// let (_, error) = locator.locate_in_slice(&data).unwrap_err();
+    /// let false_signature = error.eocd_offset().expect("signature found");
+    ///
+    /// let archive = locator
+    ///     .locate_in_slice_with_end(&data, false_signature)
+    ///     .map_err(|(_, e)| e)?;
+    /// assert_eq!(archive.comment().as_bytes(), comment);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub fn locate_in_slice_with_end<T: AsRef<[u8]>>(
+        &self,
+        data: T,
+        end_offset: u64,
+    ) -> Result<ZipSliceArchive<T>, (T, Error)> {
+        let bytes = data.as_ref();
+        let end = end_offset.min(bytes.len() as u64) as usize;
+        match self.locate_in_byte_slice(bytes, end) {
             Ok(eocd) => Ok(ZipSliceArchive::new(data, eocd)),
             Err(e) => Err((data, e)),
         }
