@@ -6,7 +6,7 @@ A low-level, composable Zip archive reader and writer.
 - Pure Rust. Zero dependencies. Zero unsafe. [Untouchable performance](https://github.com/nickbabcock/rawzip#benchmarks).
 - Zip64 support (read and write archives with 100k+ entries, >100 GB archives, >5 GB entries)
 - Fan out streaming (de)compression across multiple threads
-- Zero-allocation streaming reader. In-memory reads are zero-copy and `no_std`
+- Zero-allocation streaming reader. In-memory reads are zero-copy, `no_std`, and [provably can't panic](https://github.com/nickbabcock/rawzip/tree/master/no-panic)
 - Bring the compression and strong encryption that fits your workload
 - Use the built-in CRC, entry integrity checks, and ZipCrypto, or swap in your own
 
