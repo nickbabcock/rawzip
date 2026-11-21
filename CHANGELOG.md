@@ -1,3 +1,9 @@
+## Unreleased
+
+Fix `ExtraFieldId::WINDOWS_NT_SECURITY_DESCRIPTOR`, which was `0x4653` instead of the `0x4453` ("SD") given in APPNOTE 4.6.1. Lookups and matches against the constant did not find the field.
+
+Improve slice extraction throughput by 11–33%. `ZipSliceArchive::get_entry` now splits the local header and compressed data into separate slices, so `ZipSliceEntry::data` returns the stored slice without a bounds check.
+
 ## v0.5.2 - October 4th, 2026
 
 Fix central directory iteration that did not end after a parse error. The slice `Iterator` and the reader `next_entry` returned the same error forever, so callers that skip errors (for example, `filter_map(Result::ok)`) did not stop. An error now ends iteration, and `ZipSliceEntries` implements `FusedIterator`.
