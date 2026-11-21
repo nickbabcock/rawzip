@@ -484,8 +484,13 @@ fn rfind<const NEEDLE: u32>(haystack: &[u8]) -> Option<usize> {
     const HI: u64 = u64::from_ne_bytes([0x80; LANES]);
 
     #[inline(always)]
+    fn borrows(word: u64) -> u64 {
+        word.wrapping_sub(LO) & !word
+    }
+
+    #[inline(always)]
     fn haszero(word: u64) -> u64 {
-        word.wrapping_sub(LO) & !word & HI
+        borrows(word) & HI
     }
 
     #[inline(always)]
@@ -493,9 +498,9 @@ fn rfind<const NEEDLE: u32>(haystack: &[u8]) -> Option<usize> {
         !(((word & LO7) + LO7) | word) & HI
     }
 
-    // Loads the word at `at` as one load. Byte-wise loads let the optimizer
-    // share the bytes that overlapping words have in common, and it then
-    // assembles each word a byte at a time.
+    // Loads the word at `at` with one 8-byte load. Indexing bytes one at a time
+    // would let the optimizer share bytes between overlapping words and then
+    // assemble each word a byte at a time, which is slower.
     #[inline(always)]
     fn word_at<const L: usize>(tail: &[u8; L], at: usize) -> u64 {
         tail.get(at..)
@@ -503,9 +508,10 @@ fn rfind<const NEEDLE: u32>(haystack: &[u8]) -> Option<usize> {
             .map_or(0, |word| u64::from_le_bytes(*word))
     }
 
-    // Returns the end of the last needle that ends in the word at `at`. The
-    // needle's other bytes are loaded from the word before, so `at` is at
-    // least a word into `tail`, and each load is at a fixed offset from it.
+    // Returns how far from the end of `tail` the last needle that ends in the
+    // word at `at` starts. The needle's other bytes are loaded from the word
+    // before, so `at` is at least a word into `tail`, and each load is at a
+    // fixed offset from it.
     #[inline(always)]
     fn check<const L: usize>(tail: &[u8; L], at: usize, bc: &[u64; N]) -> Option<usize> {
         let cur = word_at(tail, at);
@@ -529,7 +535,9 @@ fn rfind<const NEEDLE: u32>(haystack: &[u8]) -> Option<usize> {
             iszero(cur ^ bc[N - 1]) & iszero(w0 ^ bc[0]) & iszero(w1 ^ bc[1]) & iszero(w2 ^ bc[2]);
 
         // highest set bit is the last match
-        (matches != 0).then(|| at + matches.ilog2() as usize / 8 + 1)
+        matches
+            .checked_ilog2()
+            .map(|bit| L - (at - (N - 1)) - (bit / 8) as usize)
     }
 
     // The fast path scans backwards a block at a time. `tail` is a block and
@@ -538,7 +546,8 @@ fn rfind<const NEEDLE: u32>(haystack: &[u8]) -> Option<usize> {
     const TAIL: usize = BLOCK + LANES;
     const PAIR: usize = 2 * LANES;
 
-    // Returns the end of the last needle that ends in the block
+    // Returns how far from the end of `tail` the last needle that ends in the
+    // block starts
     #[inline(always)]
     fn scan(tail: &[u8; TAIL], bc: &[u64; N]) -> Option<usize> {
         (0..BLOCK / LANES)
@@ -546,32 +555,33 @@ fn rfind<const NEEDLE: u32>(haystack: &[u8]) -> Option<usize> {
             .find_map(|i| check(tail, LANES + i * LANES, bc))
     }
 
-    // Returns if a needle can end in the block, from the needle's last byte,
+    // Returns whether a needle can end in the block, from the needle's last byte,
     // then from its last two bytes, which are rarer together
     #[inline(always)]
     fn candidates(tail: &[u8; TAIL], bc: &[u64; N]) -> bool {
+        // `HI` is applied once to the union instead of to each word
         let mut last = 0;
         for at in (LANES..TAIL).step_by(LANES) {
-            last |= haszero(word_at(tail, at) ^ bc[N - 1]);
+            last |= borrows(word_at(tail, at) ^ bc[N - 1]);
         }
-        if last == 0 {
+        if last & HI == 0 {
             return false;
         }
 
         let mut pair = 0;
         for at in (LANES..TAIL).step_by(LANES) {
             pair |=
-                haszero(word_at(tail, at) ^ bc[N - 1]) & haszero(word_at(tail, at - 1) ^ bc[N - 2]);
+                borrows(word_at(tail, at) ^ bc[N - 1]) & borrows(word_at(tail, at - 1) ^ bc[N - 2]);
         }
-        pair != 0
+        pair & HI != 0
     }
 
     // Searches a word at a time, then the last bytes one at a time
     #[inline(always)]
     fn words(mut head: &[u8], bc: &[u64; N], needle: u32) -> Option<usize> {
         while let Some((_, tail)) = head.split_last_chunk::<PAIR>() {
-            if let Some(end) = check(tail, LANES, bc) {
-                return Some(head.len() + end - PAIR - N);
+            if let Some(back) = check(tail, LANES, bc) {
+                return Some(head.len() - back);
             }
             (head, _) = head.split_at(head.len().saturating_sub(LANES));
         }
@@ -586,8 +596,8 @@ fn rfind<const NEEDLE: u32>(haystack: &[u8]) -> Option<usize> {
     fn blocks(mut head: &[u8], bc: &[u64; N], needle: u32) -> Option<usize> {
         while let Some((_, tail)) = head.split_last_chunk::<TAIL>() {
             if candidates(tail, bc) {
-                if let Some(end) = scan(tail, bc) {
-                    return Some(head.len() + end - TAIL - N);
+                if let Some(back) = scan(tail, bc) {
+                    return Some(head.len() - back);
                 }
             }
             (head, _) = head.split_at(head.len().saturating_sub(BLOCK));
@@ -608,10 +618,10 @@ fn rfind<const NEEDLE: u32>(haystack: &[u8]) -> Option<usize> {
     // filtered
     let mut head = haystack;
     if let Some((_, tail)) = head.split_last_chunk::<TAIL>() {
-        if let Some(end) = scan(tail, &bc) {
-            // The match ends at the same distance from the end of `head` as
+        if let Some(back) = scan(tail, &bc) {
+            // The match starts at the same distance from the end of `head` as
             // from the end of `tail`
-            return Some(head.len() + end - TAIL - N);
+            return Some(head.len() - back);
         }
         (head, _) = head.split_at(head.len().saturating_sub(BLOCK));
         if head.len() >= TAIL {
