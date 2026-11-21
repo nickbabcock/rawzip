@@ -297,29 +297,62 @@ impl ZipLocator {
             )
         };
 
+        let locator_offset = eocd_offset - eocd64l_size as u64;
         let zip64_eocd = &buffer[eocd64_start..eocd64_end];
-        let zip64_record = match super::parse_zip64_candidate(
-            zip64_eocd,
-            &eocd,
-            &zip64_locator,
-            eocd_offset - eocd64l_size as u64,
-        ) {
-            Some(record) => record,
-            None => {
-                return finish_classic_eocd(
-                    reader,
-                    EndOfCentralDirectoryRecord::from_parts(eocd_offset, &eocd),
-                );
-            }
-        };
+        let declared = zip64_locator.directory_offset;
+        let (zip64_offset, zip64_record) =
+            match super::parse_zip64_candidate(zip64_eocd, declared, &eocd, locator_offset) {
+                Some(record) => (declared, record),
+                None => {
+                    let Some(offset) =
+                        super::shifted_zip64_offset(&zip64_locator, locator_offset, zip64_eocd)
+                    else {
+                        return finish_classic_eocd(
+                            reader,
+                            EndOfCentralDirectoryRecord::from_parts(eocd_offset, &eocd),
+                        );
+                    };
+
+                    // Reuse the buffer unless a read replaced it. A buffer too
+                    // small for the record is an error, as the slice would find it.
+                    let distance = (eocd_offset - offset) as usize;
+                    let (start, end) = if !reader.is_marked() && distance <= buffer_pos {
+                        (buffer_pos - distance, buffer_pos)
+                    } else {
+                        let len = Zip64EndOfCentralDirectoryRecord::SIZE;
+                        match reader.read_at_least_at(buffer, len, offset) {
+                            Ok(read) => (0, read),
+                            Err(e) => return Err((reader.inner, e)),
+                        }
+                    };
+
+                    let record = super::parse_shifted_zip64_candidate(
+                        &buffer[start..end],
+                        offset,
+                        &eocd,
+                        &zip64_locator,
+                        locator_offset,
+                    );
+
+                    match record {
+                        Some(record) => (offset, record),
+                        None => {
+                            return finish_classic_eocd(
+                                reader,
+                                EndOfCentralDirectoryRecord::from_parts(eocd_offset, &eocd),
+                            );
+                        }
+                    }
+                }
+            };
 
         // todo: zip64 extensible data sector
 
-        let zip_eocd =
-            Zip64EndOfCentralDirectory::from_parts(zip64_locator.directory_offset, zip64_record);
+        let zip_eocd = Zip64EndOfCentralDirectory::from_parts(zip64_offset, zip64_record);
         let eocd = EndOfCentralDirectoryRecord::from_parts(eocd_offset, &eocd);
+        let prelude = zip64_offset.saturating_sub(declared);
         match EndOfCentralDirectory::create_zip64(eocd, zip_eocd) {
-            Ok(eocd) => Ok((reader.inner, eocd)),
+            Ok(eocd) => Ok((reader.inner, eocd.with_prelude(prelude))),
             Err(e) => Err((reader.inner, e)),
         }
     }

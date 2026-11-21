@@ -10,6 +10,8 @@ Fix `ReaderAt` impls for `&T`, `&mut T`, `Arc<T>`, `Rc<T>`, and `Box<T>` that di
 
 `MutexReader` (used by `ZipArchive::from_seekable`) now implements `read_exact_at` with one lock and one pair of seeks for the full read. Before, each short read from the inner stream locked the mutex and seeked again.
 
+Fix zip64 archives with undeclared prelude data (for example, `cat header.sh archive.zip > app`), which failed to open or to iterate. rawzip now looks for the zip64 record directly before its locator, as CPython's `zipfile` and Info-ZIP's `unzip` do.
+
 Improve slice extraction throughput by 11–33%. `ZipSliceArchive::get_entry` now splits the local header and compressed data into separate slices, so `ZipSliceEntry::data` returns the stored slice without a bounds check.
 
 2.5–5× faster end of central directory search.
