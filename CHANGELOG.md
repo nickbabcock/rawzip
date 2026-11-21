@@ -18,6 +18,8 @@ Remove extra reads from the archive locator when the archive comment does not fi
 
 Add `ZipArchive::entries_from` and `ZipEntries::next_offset` to resume central directory iteration from an offset.
 
+Add `ZipLocator::locate_in_slice_with_end` to resume a slice search before a false end of central directory signature, such as one in an archive comment. Before, the only way to skip it was to cut the slice, which also cut the comment of the real record, and the locator rejected that record.
+
 ## v0.5.2 - October 4th, 2026
 
 Fix central directory iteration that did not end after a parse error. The slice `Iterator` and the reader `next_entry` returned the same error forever, so callers that skip errors (for example, `filter_map(Result::ok)`) did not stop. An error now ends iteration, and `ZipSliceEntries` implements `FusedIterator`.
