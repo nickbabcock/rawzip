@@ -1,4 +1,4 @@
-## Unreleased
+## v0.5.3 - November 21st, 2026
 
 Fix a corrupt central directory after a writer entry failed or was not finished. When `ZipFileBuilder::start` or `ZipDirBuilder::create` returned an error (for example, a comment longer than 65,535 bytes), or when a `ZipEntryWriter` was dropped without `finish`, the names and comments of all subsequent entries were written at the wrong positions. The central directory then disagreed with the local headers, and no error was returned. Each entry now records the position of its name and comment.
 
