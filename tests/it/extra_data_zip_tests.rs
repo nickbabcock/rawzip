@@ -7,7 +7,7 @@ use std::io::{Cursor, Write};
 const EOCD_SIZE: usize = 22;
 
 /// A digital signature record (`PK\x05\x05`) wrapping `payload`.
-fn digital_signature_record(payload: &[u8]) -> Vec<u8> {
+pub(crate) fn digital_signature_record(payload: &[u8]) -> Vec<u8> {
     let mut record = Vec::from(*b"PK\x05\x05");
     record.extend_from_slice(&(payload.len() as u16).to_le_bytes());
     record.extend_from_slice(payload);
@@ -20,7 +20,7 @@ fn digital_signature_record(payload: &[u8]) -> Vec<u8> {
 /// The writer never emits a digital signature record itself, so we construct
 /// one here where every offset is known by construction rather than recovered
 /// by scanning the bytes.
-fn zip_with_cd_trailer<'a>(name: impl Into<EntryPath<'a>>, trailer: &[u8]) -> Vec<u8> {
+pub(crate) fn zip_with_cd_trailer<'a>(name: impl Into<EntryPath<'a>>, trailer: &[u8]) -> Vec<u8> {
     let mut data = Vec::new();
     {
         let mut archive = ZipArchiveWriter::new(&mut data);

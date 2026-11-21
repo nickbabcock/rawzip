@@ -77,7 +77,7 @@ fn max_search_space_past_4gib_finds_eocd() {
 }
 
 /// Builds a ZIP whose base and local-header offsets overflow `u64`.
-fn overflow_offset_zip() -> Vec<u8> {
+pub(crate) fn overflow_offset_zip() -> Vec<u8> {
     const PRELUDE_LEN: u64 = 128;
 
     let mut data = vec![0u8; PRELUDE_LEN as usize];

@@ -116,12 +116,54 @@ impl<R> ZipArchive<R> {
         &'archive self,
         buffer: &'buf mut [u8],
     ) -> ZipEntries<'archive, 'buf, R> {
+        self.entries_from(buffer, self.eocd.directory_offset())
+    }
+
+    /// Returns a lending iterator over the entries in the central directory,
+    /// starting at the record at `offset` instead of the start of the central
+    /// directory.
+    ///
+    /// One use is an index of the central directory: it can keep 8 (or fewer) bytes per
+    /// entry, and the full record (name, metadata, wayfinder) is read again
+    /// only when it is needed. Another is iteration in batches, described in
+    /// [`ZipEntries::next_offset`].
+    ///
+    /// `offset` must come from [`ZipEntries::next_offset`] or
+    /// [`ZipFileHeaderRecord::central_directory_offset`] of this archive.
+    ///
+    /// Reads fill at most `buffer.len()` bytes and stop at the end of the
+    /// central directory, so a lookup of one record can use a buffer smaller
+    /// than [`RECOMMENDED_BUFFER_SIZE`] if it holds the record.
+    ///
+    /// ```rust
+    /// # use rawzip::{ZipArchive, RECOMMENDED_BUFFER_SIZE};
+    /// # use std::fs::File;
+    /// # let mut buffer = vec![0u8; RECOMMENDED_BUFFER_SIZE];
+    /// # let archive = ZipArchive::from_file(File::open("assets/test.zip")?, &mut buffer)?;
+    /// // The index keeps only the offset of each record.
+    /// let mut offsets = Vec::new();
+    /// let mut entries = archive.entries(&mut buffer);
+    /// while let Some(entry) = entries.next_entry()? {
+    ///     offsets.push(entry.central_directory_offset());
+    /// }
+    ///
+    /// // Later, read record 1 again on demand.
+    /// let mut entries = archive.entries_from(&mut buffer, offsets[1]);
+    /// let entry = entries.next_entry()?.expect("record at offset");
+    /// assert_eq!(entry.file_path().as_ref(), b"gophercolor16x16.png");
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub fn entries_from<'archive, 'buf>(
+        &'archive self,
+        buffer: &'buf mut [u8],
+        offset: u64,
+    ) -> ZipEntries<'archive, 'buf, R> {
         ZipEntries {
             buffer,
             archive: self,
             pos: 0,
             end: 0,
-            offset: self.eocd.directory_offset(),
+            offset,
             base_offset: self.eocd.base_offset(),
             central_dir_end_pos: self.eocd.head_eocd_offset(),
             done: false,
@@ -513,6 +555,8 @@ where
 }
 
 /// A lending iterator over file header records in a [`ZipArchive`].
+///
+/// Created by [`ZipArchive::entries`] or [`ZipArchive::entries_from`].
 #[derive(Debug)]
 pub struct ZipEntries<'archive, 'buf, R> {
     buffer: &'buf mut [u8],
@@ -525,6 +569,69 @@ pub struct ZipEntries<'archive, 'buf, R> {
     done: bool,
 }
 
+impl<R> ZipEntries<'_, '_, R> {
+    /// Returns the offset of the first central directory record that
+    /// [`ZipEntries::next_entry`] has not returned.
+    ///
+    /// Pass it to [`ZipArchive::entries_from`] to continue iteration later
+    /// with a new iterator.
+    ///
+    /// - Before the first call, it is the offset this iterator started at.
+    /// - After a record is returned, it is the offset just past that record.
+    /// - After iteration ends, it is the end of the central
+    ///   directory, and resuming from it returns `Ok(None)`.
+    /// - After an error, it is the offset of the record that failed. This
+    ///   iterator stays ended, but a new iterator from the offset tries that
+    ///   record again, for example with a larger buffer after
+    ///   [`ErrorKind::BufferTooSmall`].
+    ///
+    /// Records already read into the buffer but not yet returned are read
+    /// again when iteration resumes, so resume once per batch of records, not
+    /// once per record.
+    ///
+    /// ```rust
+    /// # use rawzip::{Error, ReaderAt, ZipArchive, RECOMMENDED_BUFFER_SIZE};
+    /// # use std::fs::File;
+    /// /// A scan that can pause between batches. It cannot hold a `ZipEntries`,
+    /// /// which would borrow `archive` and `buffer`, so it holds an offset.
+    /// struct Scan<R> {
+    ///     archive: ZipArchive<R>,
+    ///     buffer: Vec<u8>,
+    ///     offset: u64,
+    ///     uncompressed_size: u64,
+    /// }
+    ///
+    /// impl<R: ReaderAt> Scan<R> {
+    ///     /// Reads up to `n` records. Returns false when the scan is done.
+    ///     fn step(&mut self, n: usize) -> Result<bool, Error> {
+    ///         let mut entries = self.archive.entries_from(&mut self.buffer, self.offset);
+    ///         let mut read = 0;
+    ///         while read < n {
+    ///             let Some(entry) = entries.next_entry()? else { break };
+    ///             self.uncompressed_size += entry.uncompressed_size_hint();
+    ///             read += 1;
+    ///         }
+    ///         self.offset = entries.next_offset();
+    ///         Ok(read == n)
+    ///     }
+    /// }
+    ///
+    /// # let mut buffer = vec![0u8; RECOMMENDED_BUFFER_SIZE];
+    /// let archive = ZipArchive::from_file(File::open("assets/test.zip")?, &mut buffer)?;
+    /// let offset = archive.directory_offset();
+    /// let mut scan = Scan { archive, buffer, offset, uncompressed_size: 0 };
+    /// while scan.step(1)? {
+    ///     // Give control back, for example to an event loop.
+    /// }
+    /// assert_eq!(scan.uncompressed_size, 26 + 785);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    #[inline]
+    pub fn next_offset(&self) -> u64 {
+        self.offset - (self.end - self.pos) as u64
+    }
+}
+
 impl<R> ZipEntries<'_, '_, R>
 where
     R: ReaderAt,
@@ -535,7 +642,8 @@ where
     /// buffer to parse entry headers.
     ///
     /// An error is terminal. After this method returns an error, all
-    /// subsequent calls return `Ok(None)`.
+    /// subsequent calls return `Ok(None)`. To try the failed record again,
+    /// pass [`ZipEntries::next_offset`] to [`ZipArchive::entries_from`].
     #[inline]
     pub fn next_entry(&mut self) -> Result<Option<ZipFileHeaderRecord<'_>>, Error> {
         self.next_entry_impl()
@@ -554,6 +662,14 @@ where
         self.done = true;
 
         if self.pos + ZipFileHeaderFixed::SIZE > self.end {
+            // Only an offset from `entries_from` can be out of range. Checking
+            // on refill keeps this out of the per-record path.
+            if self.offset < self.archive.eocd.directory_offset()
+                || self.offset > self.central_dir_end_pos
+            {
+                return Err(self.offset_outside_directory());
+            }
+
             if self.offset >= self.central_dir_end_pos {
                 return if self.pos == self.end {
                     Ok(None)
@@ -565,6 +681,7 @@ where
                 };
             }
 
+            // A failed read leaves `next_offset` at the start of this record
             let remaining = self.end - self.pos;
             self.buffer.copy_within(self.pos..self.end, 0);
             let max_read = (self.central_dir_end_pos - self.offset)
@@ -595,26 +712,31 @@ where
 
             // The buffer can never hold this record's variable section.
             if variable_length > self.buffer.len() {
-                return Err(Error::from(ErrorKind::BufferTooSmall {
+                let err = Error::from(ErrorKind::BufferTooSmall {
                     required: variable_length,
-                }));
+                });
+                return Err(self.fail_record(central_directory_offset, err));
             }
 
             // The variable section runs past the end of the central directory,
             // so the archive is truncated or corrupt.
             let cd_remaining = remaining as u64 + (self.central_dir_end_pos - self.offset);
             if variable_length as u64 > cd_remaining {
-                return Err(Error::from(ErrorKind::Eof));
+                let err = Error::from(ErrorKind::Eof);
+                return Err(self.fail_record(central_directory_offset, err));
             }
 
             self.buffer.copy_within(self.pos..self.end, 0);
             let max_read = (self.central_dir_end_pos - self.offset)
                 .min((self.buffer.len() - remaining) as u64) as usize;
-            let read = self.archive.reader.read_at_least_at(
+            let read = match self.archive.reader.read_at_least_at(
                 &mut self.buffer[remaining..][..max_read],
                 variable_length - remaining,
                 self.offset,
-            )?;
+            ) {
+                Ok(read) => read,
+                Err(err) => return Err(self.fail_record(central_directory_offset, err)),
+            };
             self.offset += read as u64;
             self.pos = 0;
             self.end = remaining + read;
@@ -632,13 +754,44 @@ where
             central_directory_offset,
         );
         // An offset past u64::MAX is past the end of all possible inputs.
-        file_header.local_header_offset = file_header
+        let Some(local_header_offset) = file_header
             .local_header_offset
             .checked_add(self.base_offset)
-            .ok_or(ErrorKind::Eof)?;
+        else {
+            // `fail_record`, inlined by hand as `file_header` borrows the buffer
+            self.pos = self.end;
+            self.offset = central_directory_offset;
+            return Err(Error::from(ErrorKind::Eof));
+        };
+        file_header.local_header_offset = local_header_offset;
         self.pos += variable_length;
         self.done = false;
         Ok(Some(file_header))
+    }
+
+    /// Ends iteration so that `next_offset` reports the start of the failed
+    /// record at `record_offset`.
+    ///
+    /// Inlined so the compiler sees that these stores overwrite `pos`.
+    /// Otherwise each record pays an extra store and load.
+    #[inline(always)]
+    fn fail_record(&mut self, record_offset: u64, err: Error) -> Error {
+        self.pos = self.end;
+        self.offset = record_offset;
+        err
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn offset_outside_directory(&self) -> Error {
+        Error::from(ErrorKind::InvalidInput {
+            msg: format!(
+                "central directory record offset {} is outside the central directory ({}..={})",
+                self.offset,
+                self.archive.eocd.directory_offset(),
+                self.central_dir_end_pos
+            ),
+        })
     }
 
     /// Handle a record that does not start with the central directory file

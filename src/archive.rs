@@ -1423,6 +1423,11 @@ println!("Safe path: {}", safe_path.as_ref());
 
     /// Returns the offset from the start of reader where this central directory
     /// record was parsed from.
+    #[cfg_attr(
+        feature = "std",
+        doc = r#"
+Pass it to [`ZipArchive::entries_from`] to parse this record again later."#
+    )]
     #[inline]
     pub fn central_directory_offset(&self) -> u64 {
         self.central_directory_offset
