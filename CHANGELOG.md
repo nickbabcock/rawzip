@@ -4,6 +4,8 @@ Fix a corrupt central directory after a writer entry failed or was not finished.
 
 Fix `ExtraFieldId::WINDOWS_NT_SECURITY_DESCRIPTOR`, which was `0x4653` instead of the `0x4453` ("SD") given in APPNOTE 4.6.1. Lookups and matches against the constant did not find the field.
 
+Fix reads that failed on an `Interrupted` error (for example, `EINTR` from a signal). The default `ReaderAt::read_exact_at` and the internal reads of rawzip now call `read_at` again, as `std::io::Read::read_exact` does. This affects `FileReader`.
+
 Improve slice extraction throughput by 11–33%. `ZipSliceArchive::get_entry` now splits the local header and compressed data into separate slices, so `ZipSliceEntry::data` returns the stored slice without a bounds check.
 
 Remove extra reads from the archive locator when the archive comment does not fit in the scan buffer. The locator read the zip64 end of central directory locator and record again, although the data was still in the buffer. A reader with a high cost per read (for example, an HTTP range reader) saw this as extra requests.
