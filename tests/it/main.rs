@@ -1624,3 +1624,50 @@ fn comment_probe_does_not_cause_reread_of_zip64_locator() {
         "zip64 locator was read again: {offsets:?}"
     );
 }
+
+#[derive(Debug)]
+struct ShrinkingBuffer {
+    data: Vec<u8>,
+    len: Cell<usize>,
+}
+
+impl AsRef<[u8]> for ShrinkingBuffer {
+    fn as_ref(&self) -> &[u8] {
+        &self.data[..self.len.get()]
+    }
+}
+
+#[test]
+fn slice_archive_does_not_panic_when_data_shrinks() {
+    let data = std::fs::read("assets/test.zip").unwrap();
+    let len = Cell::new(data.len());
+    let archive = ZipArchive::from_slice(ShrinkingBuffer { data, len }).unwrap();
+    let entry = archive.entries().next_entry().unwrap().unwrap();
+    let end_offset = archive.end_offset();
+    assert_eq!(end_offset, archive.get_ref().data.len() as u64);
+    assert_eq!(archive.comment().as_bytes(), b"This is a zipfile comment.");
+
+    let directory_offset = archive.directory_offset() as usize;
+    let comment_offset = archive.eocd_offset() as usize + 22;
+
+    // The data ends inside the central directory, then inside the comment
+    archive.get_ref().len.set(directory_offset + 10);
+    let mut entries = archive.entries();
+    let err = entries.next_entry().unwrap_err();
+    assert!(matches!(err.kind(), ErrorKind::Eof));
+    assert!(entries.next_entry().unwrap().is_none());
+    archive.get_ref().len.set(comment_offset + 3);
+    assert_eq!(archive.comment().as_bytes(), b"");
+
+    // The central directory and comment are missing
+    archive.get_ref().len.set(4);
+    let mut entries = archive.entries();
+    let err = entries.next_entry().unwrap_err();
+    assert!(matches!(err.kind(), ErrorKind::Eof));
+    assert!(entries.next_entry().unwrap().is_none());
+
+    let err = archive.get_entry(entry.wayfinder()).unwrap_err();
+    assert!(matches!(err.kind(), ErrorKind::Eof));
+    assert_eq!(archive.comment().as_bytes(), b"");
+    assert_eq!(archive.end_offset(), end_offset);
+}

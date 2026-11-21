@@ -79,8 +79,8 @@ impl<R> ZipArchive<R> {
 
     /// Returns a mutable reference to the underlying reader.
     ///
-    /// This is in contrast to [`ZipSliceArchive`], which cannot safely expose
-    /// mutable access, as it relies on offsets and direct indexing.
+    /// The data in the reader must remain the same while the archive is in use.
+    /// See [`ZipArchive`] for more information.
     pub fn get_mut(&mut self) -> &mut R {
         &mut self.reader
     }
