@@ -12,6 +12,8 @@ Fix `ReaderAt` impls for `&T`, `&mut T`, `Arc<T>`, `Rc<T>`, and `Box<T>` that di
 
 Improve slice extraction throughput by 11–33%. `ZipSliceArchive::get_entry` now splits the local header and compressed data into separate slices, so `ZipSliceEntry::data` returns the stored slice without a bounds check.
 
+2.5–5× faster end of central directory search.
+
 Remove extra reads from the archive locator when the archive comment does not fit in the scan buffer. The locator read the zip64 end of central directory locator and record again, although the data was still in the buffer. A reader with a high cost per read (for example, an HTTP range reader) saw this as extra requests.
 
 ## v0.5.2 - October 4th, 2026
