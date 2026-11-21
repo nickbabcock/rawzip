@@ -469,7 +469,7 @@ pub(crate) fn rfind_end_of_central_dir_signature(haystack: &[u8]) -> Option<usiz
 ///
 /// - windows().rposition(): 2 GiB/s (complete data independence as it's just loop of u32 loads)
 /// - `memmem::rfind`: 8.4 GiB/s (586 MiB/s worst case)
-/// - This implementation: 16.0 GiB/s (4.63 GiB/s worst case)
+/// - This implementation: 39.3 GiB/s (22.8 GiB/s worst case)
 ///
 /// Each load is from an array that is split from the end of the haystack, at
 /// an offset within the array, so the search has no panic paths.
