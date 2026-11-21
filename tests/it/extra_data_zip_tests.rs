@@ -158,42 +158,45 @@ fn test_concatenated_zip_files() {
     assert_eq!(second_prefix, b"PREFIX_FOR_SECOND_ZIP\n");
 }
 
-#[test]
-fn test_zip_with_secret_prelude() {
-    // A secret prelude is where a non zip64 file is preceded by data but is not
-    // captured in the reported central directory offset. This is recoverable
-    // (only for non zip64 files) as we can compare the expected eocd offset
-    // with the actual offset.
-    let cases = [("assets/test.zip", 2)];
-    for (asset, entries_count) in cases {
-        let data = std::fs::read(asset).unwrap();
-        let data = [&[0u8; 1000], data.as_slice()].concat();
-        let archive = rawzip::ZipArchive::from_slice(&data).unwrap();
-        let zip_start_offset = find_zip_data_start_offset_slice(&archive);
-        let extracted_prefix = &data[..zip_start_offset as usize];
-        assert_eq!(extracted_prefix, &[0u8; 1000]);
-        let entries: Vec<_> = archive.entries().collect();
-        assert_eq!(entries.len(), entries_count);
-    }
+/// A secret prelude is prepended data the archive's offsets omit. The 64-byte
+/// buffer forces the reader to read the zip64 records instead of reusing them.
+#[rstest]
+fn test_zip_with_secret_prelude(
+    #[values(
+        "assets/test.zip",
+        "assets/zip64.zip",
+        "assets/missing-zip64-sentinels.zip"
+    )]
+    asset: &str,
+    #[values(64, rawzip::RECOMMENDED_BUFFER_SIZE)] locator_buffer_size: usize,
+) {
+    let original = std::fs::read(asset).unwrap();
+    let entries_count = ZipArchive::from_slice(&original).unwrap().entries().count();
+    let data = [&[0u8; 1000], original.as_slice()].concat();
 
+    let archive = ZipArchive::from_slice(&data).unwrap();
+    assert_eq!(find_zip_data_start_offset_slice(&archive), 1000);
+    assert_eq!(
+        archive
+            .entries()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap()
+            .len(),
+        entries_count
+    );
+
+    let mut buf = vec![0u8; locator_buffer_size];
+    let archive = rawzip::ZipLocator::new()
+        .locate_in_reader(&data, &mut buf, data.len() as u64)
+        .unwrap();
+    assert_eq!(find_zip_data_start_offset_reader(&archive), 1000);
     let mut buf = vec![0u8; rawzip::RECOMMENDED_BUFFER_SIZE];
-    for (asset, entries_count) in cases {
-        let data = std::fs::read(asset).unwrap();
-        let data = [&[0u8; 1000], data.as_slice()].concat();
-        let locator = rawzip::ZipLocator::new();
-        let archive = locator
-            .locate_in_reader(&data, &mut buf, data.len() as u64)
-            .unwrap();
-        let zip_start_offset = find_zip_data_start_offset_reader(&archive);
-        let extracted_prefix = &data[..zip_start_offset as usize];
-        assert_eq!(extracted_prefix, &[0u8; 1000]);
-        let mut count = 0;
-        let mut entries = archive.entries(&mut buf);
-        while entries.next_entry().unwrap().is_some() {
-            count += 1;
-        }
-        assert_eq!(count, entries_count);
+    let mut entries = archive.entries(&mut buf);
+    let mut count = 0;
+    while entries.next_entry().unwrap().is_some() {
+        count += 1;
     }
+    assert_eq!(count, entries_count);
 }
 
 #[rstest]
@@ -247,4 +250,123 @@ fn digital_signature_marker_inside_record_data() {
     let name = EntryPath::verbatim(b"PK\x05\x05ME".as_slice());
     let data = zip_with_cd_trailer(name, &digital_signature_record(b"PK\x05\x05"));
     assert_eq!(entry_paths(&data), [b"PK\x05\x05ME".to_vec()]);
+}
+
+/// A buffer too small for the shifted zip64 record is an error, not a silent
+/// fallback to a classic EOCD that can describe a different directory
+#[rstest]
+fn secret_prelude_with_buffer_smaller_than_zip64_record(#[values(46, 55)] buffer_size: usize) {
+    let original = std::fs::read("assets/missing-zip64-sentinels.zip").unwrap();
+    let data = [&[0u8; 1000], original.as_slice()].concat();
+    let mut buf = vec![0u8; buffer_size];
+    let (_, err) = rawzip::ZipLocator::new()
+        .locate_in_reader(&data, &mut buf, data.len() as u64)
+        .unwrap_err();
+    assert!(matches!(
+        err.kind(),
+        rawzip::ErrorKind::BufferTooSmall { required: 56 }
+    ));
+}
+
+/// Returns the central directory range declared by the zip64 end of central
+/// directory record of `data`, an archive without a comment
+fn declared_zip64_central_directory(data: &[u8]) -> std::ops::Range<usize> {
+    let record = data.len() - EOCD_SIZE - 20 - 56;
+    let field = |at: usize| u64::from_le_bytes(data[at..at + 8].try_into().unwrap()) as usize;
+    let (size, offset) = (field(record + 40), field(record + 48));
+    offset..offset + size
+}
+
+/// A central directory planted where the stale offsets point is ignored, as in
+/// CPython and Info-ZIP
+#[test]
+fn secret_zip64_prelude_ignores_central_directory_in_prelude() {
+    let original = std::fs::read("assets/zip64.zip").unwrap();
+    let central_directory = declared_zip64_central_directory(&original);
+    let planted = original[central_directory.clone()]
+        .iter()
+        .map(|&b| if b == b'R' { b'X' } else { b })
+        .collect::<Vec<_>>();
+
+    let mut data = vec![b'#'; central_directory.end + 100];
+    data[central_directory].copy_from_slice(&planted);
+    data.extend_from_slice(&original);
+
+    assert_eq!(entry_paths(&data), [b"README".to_vec()]);
+}
+
+/// No shifted lookup when the declared offset has the zip64 signature, as in
+/// CPython after CVE-2025-8291
+#[test]
+fn secret_zip64_prelude_requires_declared_offset_without_zip64_signature() {
+    let original = std::fs::read("assets/zip64.zip").unwrap();
+    let declared = original.len() - EOCD_SIZE - 20 - 56;
+    let mut data = vec![0u8; 1000];
+    data[declared..declared + 4].copy_from_slice(b"PK\x06\x06");
+    data.extend_from_slice(&original);
+
+    // The classic record holds sentinels, so falling back to it fails
+    let err = ZipArchive::from_slice(&data).unwrap_err();
+    assert!(matches!(
+        err.kind(),
+        rawzip::ErrorKind::InvalidEndOfCentralDirectory
+    ));
+
+    let mut buf = vec![0u8; rawzip::RECOMMENDED_BUFFER_SIZE];
+    let (_, err) = rawzip::ZipLocator::new()
+        .locate_in_reader(&data, &mut buf, data.len() as u64)
+        .unwrap_err();
+    assert!(matches!(
+        err.kind(),
+        rawzip::ErrorKind::InvalidEndOfCentralDirectory
+    ));
+}
+
+/// Asserts that both locators reject `data`, an archive with sentinels whose
+/// zip64 record was not recovered
+fn assert_zip64_not_recovered(data: &[u8]) {
+    let err = ZipArchive::from_slice(data).unwrap_err();
+    assert!(matches!(
+        err.kind(),
+        rawzip::ErrorKind::InvalidEndOfCentralDirectory
+    ));
+
+    let mut buf = vec![0u8; rawzip::RECOMMENDED_BUFFER_SIZE];
+    let (_, err) = rawzip::ZipLocator::new()
+        .locate_in_reader(data, &mut buf, data.len() as u64)
+        .unwrap_err();
+    assert!(matches!(
+        err.kind(),
+        rawzip::ErrorKind::InvalidEndOfCentralDirectory
+    ));
+}
+
+/// Without this check the declared offset alone would position the central
+/// directory, here onto a copy in the prelude
+#[test]
+fn secret_zip64_prelude_requires_central_directory_to_end_at_declared_offset() {
+    let original = std::fs::read("assets/zip64.zip").unwrap();
+    let central_directory = declared_zip64_central_directory(&original);
+    let shift = 500;
+    let mut data = vec![b'#'; 1000];
+    data[central_directory.start + 1000 - shift..][..central_directory.len()]
+        .copy_from_slice(&original[central_directory.clone()]);
+    data.extend_from_slice(&original);
+
+    let locator = data.len() - EOCD_SIZE - 20;
+    let declared = (central_directory.end + shift) as u64;
+    data[locator + 8..locator + 16].copy_from_slice(&declared.to_le_bytes());
+    assert_zip64_not_recovered(&data);
+}
+
+/// A declared offset inside the zip64 record is not a prelude
+#[test]
+fn secret_zip64_prelude_requires_declared_offset_before_record() {
+    let mut data = std::fs::read("assets/zip64.zip").unwrap();
+    let record = data.len() - EOCD_SIZE - 20 - 56;
+    let locator = record + 56;
+    let size = u64::from_le_bytes(data[record + 40..record + 48].try_into().unwrap());
+    data[record + 40..record + 48].copy_from_slice(&(size + 4).to_le_bytes());
+    data[locator + 8..locator + 16].copy_from_slice(&(record as u64 + 4).to_le_bytes());
+    assert_zip64_not_recovered(&data);
 }

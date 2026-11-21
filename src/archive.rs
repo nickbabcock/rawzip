@@ -138,7 +138,10 @@ impl<T: AsRef<[u8]>> ZipSliceArchive<T> {
         self.eocd.tail_eocd_offset()
     }
 
-    /// The declared offset of the start of the central directory.
+    /// The offset of the start of the central directory within the input.
+    ///
+    /// When prelude data precedes an archive whose offsets do not account for
+    /// it, this is the declared offset plus the length of the prelude.
     ///
     /// To verify the validity of this offset, start iterating through the
     /// central directory via [`ZipSliceArchive::entries`]. Ensure no errors are

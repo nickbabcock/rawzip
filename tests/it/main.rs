@@ -105,6 +105,27 @@ zip_test_case!(
 );
 
 zip_test_case!(
+    "zip64_prelude",
+    ZipTestCase {
+        // A python zipapp with zip64 end records and a shebang prepended
+        // after the archive was written, so its offsets omit the shebang
+        name: "zip64-prelude.pyz",
+        files: vec![ZipTestFileEntry {
+            name: "__main__.py",
+            expected_content: ExpectedContent::Content(
+                b"print(\"hello from a zip64 zipapp\")\n".to_vec()
+            ),
+            expected_datetime: Some(ZipDateTimeKind::Local(
+                LocalDateTime::from_components(2026, 1, 1, 0, 0, 0, 0).unwrap()
+            )),
+            expected_mode: None,
+            expected_creator_system: Some(CreatorSystem::UNIX),
+        }],
+        ..Default::default()
+    }
+);
+
+zip_test_case!(
     "test_trailing_junk",
     ZipTestCase {
         name: "test-trailing-junk.zip",
@@ -1309,6 +1330,7 @@ fn test_central_directory_offset_consistency() {
         "winxp.zip",
         "zip64-2.zip",
         "zip64.zip",
+        "zip64-prelude.pyz",
     ];
 
     for test_file in &test_files {

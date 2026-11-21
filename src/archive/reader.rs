@@ -234,7 +234,7 @@ impl<R> ZipArchive<R> {
         self.eocd.tail_eocd_offset()
     }
 
-    /// The declared offset of the start of the central directory.
+    /// The offset of the start of the central directory within the reader.
     ///
     /// This has the same semantics as [`ZipSliceArchive::directory_offset`].
     /// To verify the validity of this offset, start iterating through the

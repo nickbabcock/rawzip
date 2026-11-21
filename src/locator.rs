@@ -1,8 +1,9 @@
 use crate::errors::{Error, ErrorKind};
 use crate::utils::{le_u16, le_u32, le_u64};
 use crate::{
-    END_OF_CENTRAL_DIR_LOCATOR_SIGNATURE, Zip64EndOfCentralDirectory,
-    Zip64EndOfCentralDirectoryRecord, ZipFileHeaderFixed, ZipSliceArchive,
+    END_OF_CENTRAL_DIR_LOCATOR_SIGNATURE, END_OF_CENTRAL_DIR_SIGNATURE64,
+    Zip64EndOfCentralDirectory, Zip64EndOfCentralDirectoryRecord, ZipFileHeaderFixed,
+    ZipSliceArchive,
 };
 use core::num::NonZeroU64;
 
@@ -139,26 +140,35 @@ impl ZipLocator {
             ));
         };
 
-        let zip64_eocd = &data[zip64_locator.directory_offset.min(data.len() as u64) as usize..];
-        let zip64_record = match parse_zip64_candidate(
-            zip64_eocd,
-            &eocd,
-            &zip64_locator,
-            location as u64 - Zip64EndOfCentralDirectoryLocatorRecord::SIZE as u64,
-        ) {
-            Some(record) => record,
-            None => {
-                return EndOfCentralDirectory::create(EndOfCentralDirectoryRecord::from_parts(
-                    location as u64,
+        let locator_offset = location as u64 - Zip64EndOfCentralDirectoryLocatorRecord::SIZE as u64;
+        let record_at = |offset: u64| &data[offset.min(data.len() as u64) as usize..];
+        let declared = zip64_locator.directory_offset;
+        let declared_record = record_at(declared);
+        let candidate = parse_zip64_candidate(declared_record, declared, &eocd, locator_offset)
+            .map(|record| (declared, record))
+            .or_else(|| {
+                let offset = shifted_zip64_offset(&zip64_locator, locator_offset, declared_record)?;
+                parse_shifted_zip64_candidate(
+                    record_at(offset),
+                    offset,
                     &eocd,
-                ));
-            }
+                    &zip64_locator,
+                    locator_offset,
+                )
+                .map(|record| (offset, record))
+            });
+
+        let Some((zip64_offset, zip64_record)) = candidate else {
+            return EndOfCentralDirectory::create(EndOfCentralDirectoryRecord::from_parts(
+                location as u64,
+                &eocd,
+            ));
         };
 
-        let zip64 =
-            Zip64EndOfCentralDirectory::from_parts(zip64_locator.directory_offset, zip64_record);
+        let zip64 = Zip64EndOfCentralDirectory::from_parts(zip64_offset, zip64_record);
         let eocd = EndOfCentralDirectoryRecord::from_parts(location as u64, &eocd);
-        EndOfCentralDirectory::create_zip64(eocd, zip64)
+        let prelude = zip64_offset.saturating_sub(declared);
+        EndOfCentralDirectory::create_zip64(eocd, zip64).map(|eocd| eocd.with_prelude(prelude))
     }
 
     /// Locates the EOCD record within a byte slice.
@@ -290,6 +300,13 @@ impl EndOfCentralDirectory {
 
         result.validate()?;
         Ok(result)
+    }
+
+    /// Accounts for `len` bytes of prelude data missing from the offsets
+    fn with_prelude(mut self, len: u64) -> Self {
+        self.base_offset = len;
+        self.central_dir_offset = self.central_dir_offset.saturating_add(len);
+        self
     }
 
     fn validate(&self) -> Result<(), Error> {
@@ -460,10 +477,12 @@ impl Zip64EndOfCentralDirectoryLocatorRecord {
     }
 }
 
+/// Parses the zip64 record at `record_offset` if it ends at the locator and
+/// agrees with the classic record
 fn parse_zip64_candidate(
     data: &[u8],
+    record_offset: u64,
     classic: &EndOfCentralDirectoryRecordFixed,
-    locator: &Zip64EndOfCentralDirectoryLocatorRecord,
     locator_offset: u64,
 ) -> Option<Zip64EndOfCentralDirectoryRecord> {
     const ZIP64_SIZE_PREFIX: u64 = 12;
@@ -475,8 +494,7 @@ fn parse_zip64_candidate(
         return None;
     }
 
-    let record_end = locator
-        .directory_offset
+    let record_end = record_offset
         .checked_add(ZIP64_SIZE_PREFIX)?
         .checked_add(zip64.size)?;
 
@@ -490,6 +508,38 @@ fn parse_zip64_candidate(
             || u64::from(classic.central_dir_offset) == zip64.central_dir_offset);
 
     consistent.then_some(zip64)
+}
+
+/// Where the zip64 record sits when data was prepended without updating
+/// offsets. Like CPython after CVE-2025-8291, only when the declared offset
+/// lacks the zip64 signature.
+fn shifted_zip64_offset(
+    locator: &Zip64EndOfCentralDirectoryLocatorRecord,
+    locator_offset: u64,
+    declared_record: &[u8],
+) -> Option<u64> {
+    let signature = END_OF_CENTRAL_DIR_SIGNATURE64.to_le_bytes();
+    if declared_record.starts_with(&signature) {
+        return None;
+    }
+
+    let offset = locator_offset.checked_sub(Zip64EndOfCentralDirectoryRecord::SIZE as u64)?;
+    (locator.directory_offset < offset).then_some(offset)
+}
+
+/// Parses a zip64 record at the [`shifted_zip64_offset`], which also requires
+/// the central directory to end where the locator declares the record starts
+fn parse_shifted_zip64_candidate(
+    data: &[u8],
+    record_offset: u64,
+    classic: &EndOfCentralDirectoryRecordFixed,
+    locator: &Zip64EndOfCentralDirectoryLocatorRecord,
+    locator_offset: u64,
+) -> Option<Zip64EndOfCentralDirectoryRecord> {
+    parse_zip64_candidate(data, record_offset, classic, locator_offset).filter(|zip64| {
+        zip64.central_dir_offset.checked_add(zip64.central_dir_size)
+            == Some(locator.directory_offset)
+    })
 }
 
 /// Splits `data` at the last end of central directory signature that ends at
