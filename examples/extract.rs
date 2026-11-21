@@ -236,16 +236,7 @@ fn extract_zip_archive<P: AsRef<std::path::Path>>(
 
         match entry.last_modified() {
             rawzip::time::ZipDateTimeKind::Utc(dt) => {
-                let mtime = filetime::FileTime::from_unix_time(dt.to_unix(), dt.nanosecond());
-                filetime::set_file_mtime(&out_path, mtime).map_err(|e| {
-                    ExtractionError::io_context(
-                        e,
-                        format!(
-                            "Failed to set file modification time for: {}",
-                            out_path.display()
-                        ),
-                    )
-                })?;
+                set_modified(&outfile, &out_path, dt.to_unix(), dt.nanosecond())?;
             }
             rawzip::time::ZipDateTimeKind::Local(dt) if dt.year() > 1980 => {
                 // We only want to write out timestamps that are more recent
@@ -266,19 +257,12 @@ fn extract_zip_archive<P: AsRef<std::path::Path>>(
 
                 match utc_time {
                     Some(utc_time) => {
-                        let mtime = filetime::FileTime::from_unix_time(
+                        set_modified(
+                            &outfile,
+                            &out_path,
                             utc_time.to_unix(),
                             utc_time.nanosecond(),
-                        );
-                        filetime::set_file_mtime(&out_path, mtime).map_err(|e| {
-                            ExtractionError::io_context(
-                                e,
-                                format!(
-                                    "Failed to set file modification time for: {}",
-                                    out_path.display()
-                                ),
-                            )
-                        })?;
+                        )?;
                     }
                     None => {
                         eprintln!(
@@ -346,6 +330,43 @@ fn extract_zip_archive<P: AsRef<std::path::Path>>(
     }
 
     Ok(())
+}
+
+/// Sets the modification time of an extracted file from seconds and
+/// nanoseconds since the Unix epoch.
+fn set_modified(
+    file: &std::fs::File,
+    path: &std::path::Path,
+    secs: i64,
+    nanos: u32,
+) -> Result<(), ExtractionError> {
+    use std::time::{Duration, UNIX_EPOCH};
+
+    let mtime = if secs >= 0 {
+        UNIX_EPOCH.checked_add(Duration::from_secs(secs.unsigned_abs()))
+    } else {
+        UNIX_EPOCH.checked_sub(Duration::from_secs(secs.unsigned_abs()))
+    }
+    .and_then(|t| t.checked_add(Duration::from_nanos(u64::from(nanos))));
+
+    let Some(mtime) = mtime else {
+        eprintln!(
+            "Modification time out of range for: {}, skipping timestamp setting",
+            path.display()
+        );
+        return Ok(());
+    };
+
+    let times = std::fs::FileTimes::new().set_modified(mtime);
+    file.set_times(times).map_err(|e| {
+        ExtractionError::io_context(
+            e,
+            format!(
+                "Failed to set file modification time for: {}",
+                path.display()
+            ),
+        )
+    })
 }
 
 #[derive(Debug)]
