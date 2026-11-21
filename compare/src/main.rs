@@ -26,6 +26,11 @@ fn main() {
             let result = zip(path).unwrap();
             println!("zip: {:?} {}", now.elapsed(), result);
         }
+        "eazip" => {
+            let now = std::time::Instant::now();
+            let result = eazip(path).unwrap();
+            println!("eazip: {:?} {}", now.elapsed(), result);
+        }
         "async" => {
             let rt = tokio::runtime::Runtime::new().unwrap();
             let now = std::time::Instant::now();
@@ -75,6 +80,16 @@ fn zip<P: AsRef<std::path::Path>>(fp: P) -> anyhow::Result<u64> {
         result += entry.size();
     }
 
+    Ok(result)
+}
+
+fn eazip<P: AsRef<std::path::Path>>(fp: P) -> anyhow::Result<u64> {
+    let archive = eazip::ArchiveReader::open(fp)?;
+    let result = archive
+        .entries()
+        .iter()
+        .map(|x| x.uncompressed_size)
+        .sum::<u64>();
     Ok(result)
 }
 
