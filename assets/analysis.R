@@ -4,7 +4,7 @@ library(readr)
 
 df <- read_csv("./rawzip-benchmark-data.csv")
 
-reader_names <- c("rawzip_slice", "rawzip_reader", "zip", "rc_zip", "async_zip")
+reader_names <- c("rawzip_slice", "rawzip_reader", "zip", "eazip", "rc_zip", "async_zip")
 
 df <- df %>%
   mutate(
@@ -17,7 +17,8 @@ df <- df %>%
 reader_colors <- c(
   rawzip_slice  = "#08519c",
   rawzip_reader = "#6baed6",
-  zip           = "#737373",
+  zip           = "#636363",
+  eazip         = "#7f7f7f",
   rc_zip        = "#969696",
   async_zip     = "#bdbdbd"
 )
@@ -26,6 +27,7 @@ reader_labels <- c(
   rawzip_slice = "rawzip (slice)",
   rawzip_reader = "rawzip (reader)",
   zip = "zip",
+  eazip = "eazip",
   rc_zip = "rc_zip",
   async_zip = "async_zip"
 )
@@ -120,7 +122,7 @@ print(extract_p)
 ggsave("rawzip-extract-comparison.png", plot = extract_p, width = 9, height = 5, dpi = 150)
 
 # Write benchmarks: throughput by archive format and implementation.
-write_impls <- c("rawzip", "zip", "async_zip")
+write_impls <- c("rawzip", "zip", "eazip", "async_zip")
 write_df <- df %>%
   filter(group == "write") %>%
   mutate(
@@ -137,6 +139,7 @@ write_mean <- write_df %>%
 write_colors <- c(
   rawzip = reader_colors[["rawzip_slice"]],
   zip = reader_colors[["zip"]],
+  eazip = reader_colors[["eazip"]],
   async_zip = reader_colors[["async_zip"]]
 )
 

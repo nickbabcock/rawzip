@@ -6,6 +6,7 @@ edition = "2024"
 anyhow = "1.0.103"
 async_zip = { version = "0.0.18", features = ["tokio", "tokio-fs", "deflate"] }
 criterion = { version = "0.8", features = ["async_tokio", "csv_output"] }
+eazip = "0.2.8"
 rawzip = { path = ".." }
 rc-zip = "5.4.1"
 rc-zip-sync = "4.4.2"

@@ -103,6 +103,20 @@ fn compression_ratio_benchmarks(c: &mut Criterion) {
         })
     });
 
+    group.bench_function("eazip", |b| {
+        b.iter(|| {
+            let cursor = Cursor::new(&zip_data);
+            let archive = eazip::ArchiveReader::new(cursor).unwrap();
+            let totals = archive
+                .entries()
+                .iter()
+                .fold((0u64, 0u64), |(c, u), entry| {
+                    (c + entry.compressed_size, u + entry.uncompressed_size)
+                });
+            black_box(totals)
+        })
+    });
+
     group.bench_function("async_zip", |b| {
         b.to_async(&rt).iter(|| async {
             use async_zip::base::read::seek::ZipFileReader;
@@ -223,6 +237,30 @@ fn extract_benchmarks(c: &mut Criterion) {
             })
         });
 
+        // eazip: eager open (with name validation and a duplicate-name index),
+        // then each entry is read by index through its CRC-checking reader.
+        group.bench_function(BenchmarkId::new("eazip", label), |b| {
+            let mut scratch = vec![0u8; 8192];
+            b.iter(|| {
+                let cursor = Cursor::new(&zip_data);
+                let mut archive = eazip::ArchiveReader::new(cursor).unwrap();
+                let n = if take_all { archive.len() } else { 1 };
+                let mut bytes = 0u64;
+                for i in 0..n {
+                    let mut file = archive.get_by_index(i).unwrap();
+                    let mut reader = file.read().unwrap();
+                    loop {
+                        let read = reader.read(&mut scratch).unwrap();
+                        if read == 0 {
+                            break;
+                        }
+                        bytes += read as u64;
+                    }
+                }
+                black_box(bytes)
+            })
+        });
+
         // async_zip: eager open, then each entry is read by index.
         group.bench_function(BenchmarkId::new("async_zip", label), |b| {
             b.to_async(&rt).iter(|| async {
@@ -299,6 +337,31 @@ fn write_benchmarks(c: &mut Criterion) {
         });
     });
 
+    // eazip emits the extended timestamp field natively when a modification
+    // time is set. It also unconditionally writes zip64 extra fields, so its
+    // archive is larger than rawzip's for the same workload.
+    group.bench_function("extra_fields/eazip", |b| {
+        b.iter(|| {
+            let mut output = Cursor::new(Vec::new());
+            let mut archive = eazip::ArchiveWriter::new(&mut output);
+            let jan_1_2001 =
+                rawzip::time::UtcDateTime::from_components(2001, 1, 1, 0, 0, 0, 0).unwrap();
+            let options = eazip::write::FileOptions::default()
+                .compression(eazip::CompressionMethod::STORE, None)
+                .modified_at(eazip::Timestamp::from_unix(jan_1_2001.to_unix() as u64));
+            let mut names = NameIter::new();
+
+            for i in 0..WRITE_ENTRIES {
+                archive
+                    .add_file(names.name_of(i), b"x".as_slice(), &options)
+                    .unwrap();
+            }
+
+            archive.finish().unwrap();
+            output.into_inner()
+        });
+    });
+
     // No extra fields. Throughput is keyed to the smaller minimal archive size.
     let minimal_bytes = create_test_zip::<false>(WRITE_ENTRIES).len() as u64;
     group.throughput(Throughput::Bytes(minimal_bytes));
@@ -320,6 +383,25 @@ fn write_benchmarks(c: &mut Criterion) {
             for i in 0..WRITE_ENTRIES {
                 archive.start_file(names.name_of(i), options).unwrap();
                 archive.write_all(b"x").unwrap();
+            }
+
+            archive.finish().unwrap();
+            output.into_inner()
+        });
+    });
+
+    group.bench_function("minimal/eazip", |b| {
+        b.iter(|| {
+            let mut output = Cursor::new(Vec::new());
+            let mut archive = eazip::ArchiveWriter::new(&mut output);
+            let options = eazip::write::FileOptions::default()
+                .compression(eazip::CompressionMethod::STORE, None);
+            let mut names = NameIter::new();
+
+            for i in 0..WRITE_ENTRIES {
+                archive
+                    .add_file(names.name_of(i), b"x".as_slice(), &options)
+                    .unwrap();
             }
 
             archive.finish().unwrap();
